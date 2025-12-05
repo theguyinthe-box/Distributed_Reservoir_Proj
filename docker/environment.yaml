@@ -1,0 +1,14 @@
+name: distributed_reservoir
+channels:
+  - defaults
+dependencies:
+  - numpy
+  - scipy
+  - scikit-learn
+  - pip
+  - pip:
+    - tabulate
+    - tqdm
+    - torch
+    - torchvision
+    - torchaudio
