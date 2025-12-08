@@ -24,6 +24,7 @@ class Agent_ROSNode(Node):
                  batch_size = 20):
     
         super().__init__(f'{func}_agent_node')
+
         # get GPU if available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.training = False
@@ -36,7 +37,7 @@ class Agent_ROSNode(Node):
         self.io_dims = d.function_dims(function)
         self.func = d.return_function(function)
         
-        self.logger = None
+        self.logger = Logger('{func}_agent_node')
         self.connected_to_edge = False
 
         self.get_logger().info("Agent started, waiting to connect to Edge...")
@@ -95,8 +96,7 @@ class Agent_ROSNode(Node):
         '''
         callback to handle parameter updates from edge
         '''
-        if self.logger is None: ### You use logger like 6 other times and you dont do this there
-            self.logger = Logger(self.function, params, self.get_logger())
+        self.
         self.get_logger().info(f"Received parameters: {msg.data}")
         self.connected_to_edge = True
 
@@ -158,9 +158,6 @@ class Agent_ROSNode(Node):
         sol = solve_ivp(self.func, [t0, self.msg_length*self.dt], ic, t_eval=tspan, method=self.integrator)
         return sol.y, sol.t
     
-    ### This is fine but technically inconsistent with your naming scheme
-    ### Are these functions to meant be exposed? 
-    ### Python convention is _ before function name for "private" internal functions
     def _send_batch_to_res(self,t_curr):
         '''
         generate data and send batch of data to 
@@ -178,6 +175,9 @@ class Agent_ROSNode(Node):
         self.ic = data[:, -1]  # Last state becomes next initial condition
         self.get_logger().debug(f"Generated and sent data batch at t=[{t_curr},{t_curr+self.msg_length*self.dt})")
 
+    def _pred_with_res(self):
+
+
     ###same as send_batch_to_res
     def _run(self):
         '''
@@ -185,14 +185,19 @@ class Agent_ROSNode(Node):
         '''
         t_curr = 0.0
         
-        while t_curr <= self.training_length:
+        if t_curr <= self.training_length:
             try:
                 self.training = True
                 self._send_batch_to_res(t_curr)
-                #update time for next iteration
+                t_curr += self.msg_length * self.dt
+            except Exception as e:
+                self.get_logger().error(f"Error in node spin: {e}")           
+        else:
+            try:
+                self.training = False
+                self._pred_with_res()
                 t_curr += self.msg_length * self.dt
             except Exception as e:
                 self.get_logger().error(f"Error in node spin: {e}")
-                break
-    
+                
       

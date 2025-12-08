@@ -1,0 +1,24 @@
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["/entrypoints/agent_entrypoint.sh"]
+    volumes:
+      - ./results:/results
+    networks:
+      - ros_docker_reservoir
+
+  edge:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["/entrypoints/edge_entrypoint.sh"]
+    volumes:
+      - ./hyperparams.xlsx:/hyperparams.xlsx:ro
+    networks:
+      - ros_docker_reservoir
+
+networks:
+  ros_docker_reservoir:
+    name: ros_reservoir_eval
