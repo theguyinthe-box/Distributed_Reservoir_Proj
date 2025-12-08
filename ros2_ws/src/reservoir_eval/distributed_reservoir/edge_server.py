@@ -3,7 +3,7 @@
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray, String
 from sklearn.preprocessing import StandardScaler
-import numpy as nn
+import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 import torch.nn as nn
