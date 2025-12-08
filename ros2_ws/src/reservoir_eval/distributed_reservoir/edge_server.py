@@ -11,6 +11,7 @@ import torch.nn as nn
 # codebase imports
 from reservoir import Reservoir
 from functions import dynamical_functions as d
+from logger import Logger
 
 class Edge_ROSNode(Node):
     def __init__(self, func:str, 
@@ -21,7 +22,7 @@ class Edge_ROSNode(Node):
         self.reservoir_params = {
             "input_dim": d.function_dims(func), 
             "res_dim": 500,
-            "spectral_radius": 1.6,
+            "spectral_radius": 1.3,
             "leak_rate": 0.15, 
         }
 
@@ -38,7 +39,7 @@ class Edge_ROSNode(Node):
         self.get_logger().info(f"Edge reservoir node ready and waiting for input.")
 
         # instantiate reservoir 
-        model = Reservoir()
+        self.model = Reservoir(self.reservoir_params('res_dim'), self.reservoir_params('sepctral_radius'), self.reservoir_params('leak_rate'))
 
     def _msg_to_layer(self, msg):
         '''
