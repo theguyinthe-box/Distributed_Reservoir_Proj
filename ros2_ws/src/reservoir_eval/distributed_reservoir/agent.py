@@ -71,7 +71,8 @@ class Agent_ROSNode(Node):
         '''
         try:
             reservoir_output = self._msg_to_layer(msg)
-            
+            results = self.model(reservoir_output)
+            # RESULTS GETS PASSED TO LOGGER
         except Exception as e:
             self.get_logger().error(f"Error handling reservoir data: {e}")
 
