@@ -1,4 +1,3 @@
-
 # dependency imports
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray, String
@@ -77,12 +76,12 @@ class Edge_ROSNode(Node):
         '''
         callback to receive data from agent
         run it through the reservoir
-        send reservoir output back to agent
+        send reservoir output back to agent with sequence number
         '''
         try:
             # Convert incoming message to tensor
             input_data = self._msg_to_layer(msg)
-            self.get_logger().debug(f"Received input data with shape: {input_data.shape}")
+            self.get_logger().debug(f"Received input data (seq {msg.seq}) with shape: {input_data.shape}")
             
             # Process through reservoir
             output_data = self.model.forward(input_data, n_steps=self.reservoir_params['iter'])
@@ -90,11 +89,11 @@ class Edge_ROSNode(Node):
             
             # Convert output to message and publish
             output_msg = self._data_to_msg(output_data)
+            output_msg.seq = msg.seq  # Preserve sequence number
             self.output_publisher.publish(output_msg)
-            self.get_logger().debug(f"Published reservoir output")
+            self.get_logger().debug(f"Published reservoir output for seq {msg.seq}")
             
         except Exception as e:
             self.get_logger().error(f"Error in _handle_input: {e}")
             import traceback
-            traceback.print_exc()    
-    
+            traceback.print_exc()

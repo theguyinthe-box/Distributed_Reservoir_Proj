@@ -18,9 +18,10 @@ class Agent_ROSNode(Node):
     def __init__(self, 
                  func: str, 
                  ic = [0.1,0.1,0.1], 
-                 dt = .001,
+                 dt = .01,
                  integrator: str = 'RK45',
-                 training_length = 500,
+                 training_length = 100,
+                 eval_length = 300,
                  batch_size = 20):
     
         super().__init__(f'{func}_agent_node')
@@ -66,11 +67,17 @@ class Agent_ROSNode(Node):
         # data generator params
         self.integrator = integrator
         self.dt = dt
-        
+        self.t_curr = 0
+
         # training setup
         self.criterion = nn.MSELoss()
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
         self.learning_rate = 0.01
+
+        self.last_pred = None
+
+        self.max_runs = training_length + eval_length  # Stop after 10 prediction runs
+        self.run_count = 0
 
     def _handle_reservoir_data(self, msg):
         '''
@@ -81,19 +88,31 @@ class Agent_ROSNode(Node):
             try:
                 # Convert message to tensor
                 reservoir_output = self._msg_to_layer(msg)
-                
+                #record rtt
+                rtt_seconds = self.logger.record_roundtrip_time(msg.seq)
+                self.get_logger().debug(f"Roundtrip time for seq {msg.seq}: {rtt_seconds*1000:.2f} ms")
                 # Get ground truth target from last generated data batch
                 if len(self.logger.data_hist) > 0:
                     # Use the last generated data as target
-                    target = torch.tensor(self.logger.gst_data_hist[:,-self.msg_length:-1], dtype=torch.float32, device=self.device).T
+                    if self.msg_length > 1:
+                        target = torch.tensor(self.logger.gst_data_hist[:,-self.msg_length:-1], dtype=torch.float32, device=self.device).T
+                    else:
+                        target = torch.tensor(self.logger.gst_data_hist[:,-1], dtype=torch.float32, device=self.device).T
                     # Train on this message immediately
                     self._train_readout(reservoir_output, target)
                     
             except Exception as e:
                 self.get_logger().error(f"Error handling reservoir data: {e}")
-
         else:
-
+            # Convert message to tensor
+            reservoir_output = self._msg_to_layer(msg)
+            #record rtt
+            rtt_seconds = self.logger.record_roundtrip_time(msg.seq)
+            self.get_logger().debug(f"Roundtrip time for seq {msg.seq}: {rtt_seconds*1000:.2f} ms")
+            # Predict through trained readout layer
+            prediction = self.model(reservoir_output)
+            self.logger.pred_hist.append(prediction)
+            self.last_pred = prediction
 
     def _handle_params(self, msg):
         '''
@@ -165,23 +184,30 @@ class Agent_ROSNode(Node):
         tspan = np.linspace(t0, t0 + self.msg_length*self.dt, self.msg_length)
         sol = solve_ivp(self.func, [t0, t0 + self.msg_length*self.dt], ic, t_eval=tspan, method=self.integrator)
         self.logger.gst_data_hist.append(sol.y)
-        self.logger.time_step_hist.append(sol.t)
+        self.logger.gst_time_step_hist.append(sol.t)
         return sol.y, sol.t
     
-    def _send_batch_to_res(self,t_curr):
+    def _send_batch_to_res(self):
         '''
-        generate data and send batch of data to 
+        generate data and send batch of data to reservoir
         '''
         # Generate data using the dynamical function
-        data, _ = self._generate_data(t_curr, self.ic)
+        data, _ = self._generate_data(self.t_curr, self.ic)
+        
+        # Get sequence number and record send time
+        seq = self.logger.get_next_msg_seq()
+        
         msg = self._data_to_msg(data)
-        self._send_data(msg)
+        msg.seq = seq  # Add sequence number to message
+
+        self.data_publisher.publish(msg)
+        
         # Update initial conditions
-        self.ic = data[:, -1]  # Last state becomes next initial condition
-        self.get_logger().debug(f"Generated and sent data batch at t=[{t_curr},{t_curr+self.msg_length*self.dt})")
+        self.ic = data[:, -1]
+        self.get_logger().debug(f"Sent batch {seq} at t=[{self.t_curr},{self.t_curr+self.msg_length*self.dt})")
 
     def _pred_with_res(self):
-        _._ = self._generate_data(self.t_curr,)
+        _._ = self._generate_data(self.t_curr)
 
 
     ###same as send_batch_to_res
@@ -192,16 +218,20 @@ class Agent_ROSNode(Node):
         if self.t_curr <= self.training_length:
             try:
                 self.training = True
-                self._send_batch_to_res(t_curr)
+                self._send_batch_to_res()
                 self.t_curr += self.msg_length * self.dt
             except Exception as e:
                 self.get_logger().error(f"Error in node spin: {e}")           
-        else:
+        elif self.run_count < self.max_runs:
             try:
                 self.training = False
-                self._pred_with_res(self.t_curr)
+                self._pred_with_res()
                 self.t_curr += self.msg_length * self.dt
+                self.run_count += 1
             except Exception as e:
                 self.get_logger().error(f"Error in node spin: {e}")
-                
-      
+        else:
+            # Evaluation complete
+            self.logger.summary()
+            rclpy.shutdown()
+
