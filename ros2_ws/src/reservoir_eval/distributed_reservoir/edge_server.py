@@ -3,7 +3,7 @@
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray, String
 from sklearn.preprocessing import StandardScaler
-import numpy as nn
+import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 import torch.nn as nn
@@ -13,32 +13,42 @@ from reservoir import Reservoir
 from functions import dynamical_functions as d
 
 class Edge_ROSNode(Node):
-    def __init__(self, func:str, 
-                 res_dim):
+    def __init__(self, func: str, 
+                 res_dim: int = 500,
+                 spectral_radius: float = 1.6,
+                 leak_rate: float = 0.15,
+                 n_iterations: int = 20):
         super().__init__('edge_server_ros_node')    
-        #hyper parameters
-
+        
+        # get GPU if available
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # hyper parameters
+        input_dim = d.function_dims(func)
         self.reservoir_params = {
-            "input_dim": d.function_dims(func), 
-            "res_dim": 500,
-            "spectral_radius": 1.6,
-            "leak_rate": 0.15, 
+            "input_dim": input_dim, 
+            "res_dim": res_dim,
+            "spectral_radius": spectral_radius,
+            "leak_rate": leak_rate, 
+            "iter": n_iterations
         }
 
         self.runtime_params = {
             "model_path": "/ros2_ws/model.pt",
         }
         
-        self.param_publisher = self.create_publisher(dict, )
-
         # Publishers / Subscribers
-        self.subscription = self.create_subscription(Float64MultiArray, f'{func}_agent_msg', self.handle_input, queue_size = 10)
-        self.publisher = self.create_publisher(Float64MultiArray, f'{func}_res_msg', queue_size = 10)
-
-        self.get_logger().info(f"Edge reservoir node ready and waiting for input.")
+        self.param_publisher = self.create_publisher(dict, 'reservoir_params', queue_size = 1)
+        self.subscription = self.create_subscription(Float32MultiArray, f'{func}_agent_msg', self._handle_input, queue_size = 10)
+        self.output_publisher = self.create_publisher(Float32MultiArray, f'{func}_res_msg', queue_size = 10)
 
         # instantiate reservoir 
-        model = Reservoir()
+        self.model = Reservoir(res_dim, spectral_radius=spectral_radius, leak_rate=leak_rate)
+        
+        # publish parameters to agent
+        self._publish_params()
+        
+        self.get_logger().info(f"Edge reservoir node ready. Reservoir: {res_dim}D, Input: {input_dim}D")
 
     def _msg_to_layer(self, msg):
         '''
@@ -55,18 +65,35 @@ class Edge_ROSNode(Node):
         msg.data = np.asarray(u, dtype=np.float32).flatten().tolist()
         return msg
     
-    def _send_data(self, msg):
+    def _publish_params(self):
         '''
-        send data to edge network
+        publish reservoir parameters to agent
         '''
-        self.data_publisher.publish(msg)
+        self.param_publisher.publish(self.reservoir_params)
+        self.get_logger().info(f"Published reservoir parameters to agent")
     
-
-    '''
-    TODO
-    function to handle new connections
-    function to queue to incoming messages
-    function to take from queue to reservoir and output 
-    function to 
-    '''    
+    def _handle_input(self, msg):
+        '''
+        callback to receive data from agent
+        run it through the reservoir
+        send reservoir output back to agent
+        '''
+        try:
+            # Convert incoming message to tensor
+            input_data = self._msg_to_layer(msg)
+            self.get_logger().debug(f"Received input data with shape: {input_data.shape}")
+            
+            # Process through reservoir
+            output_data = self.model.forward(input_data, n_steps=self.reservoir_params['iter'])
+            self.get_logger().debug(f"Reservoir output shape: {output_data.shape}")
+            
+            # Convert output to message and publish
+            output_msg = self._data_to_msg(output_data)
+            self.output_publisher.publish(output_msg)
+            self.get_logger().debug(f"Published reservoir output")
+            
+        except Exception as e:
+            self.get_logger().error(f"Error in _handle_input: {e}")
+            import traceback
+            traceback.print_exc()    
     
