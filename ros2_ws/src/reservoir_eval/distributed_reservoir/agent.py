@@ -21,21 +21,23 @@ class Agent_ROSNode(Node):
                  dt = .001,
                  integrator: str = 'RK45',
                  training_length = 500,
-                 batch_size = 20):
+                 batch_size = 1):
     
         super().__init__(f'{func}_agent_node')
+
         # get GPU if available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        # logger init
-        self.get_logger().info("Agent started, waiting for ack signal from edge...")
-        
+        self.training = False
+
+        self.res_dim = None
+
         # store function type
         self.function = func
-        self.io_dims = d.function_dims(function)
+        self.function_dims = d.function_dims(function)
         self.func = d.return_function(function)
         
-        self.logger = None
+        self.logger = Logger('{func}_agent_node')
+
         self.connected_to_edge = False
 
         self.get_logger().info("Agent started, waiting to connect to Edge...")
@@ -45,14 +47,14 @@ class Agent_ROSNode(Node):
         self.reservoir_param_subscriber = self.create_subscription(dict, 'reservoir_params', self._handle_params)
         # subscribe to reservoir output
         self.data_subscription = self.create_subscription(Float32MultiArray, f'{func}_res_msg', self._handle_reservoir_data, queue_size = 10)
-        
         # Publishers
-        self.data_publisher = self.create_publisher(Float32MultiArray, f'{function}_agent_msg', self.run, queue_size = 10)        
-
+        self.data_publisher = self.create_publisher(Float32MultiArray, f'{function}_agent_msg', self._run, queue_size = 10)        
+        
         # generates the linear layers of the 
-        self.model = Readout(self.res_dim, self.input_dim, self.io_dims)
+        self.model = Readout(self.res_dim, self.function_dim)
 
         # initial condition of the system
+        self.t_curr = 0.0
         self.ic = ic
 
         # length of each ros message
@@ -64,30 +66,49 @@ class Agent_ROSNode(Node):
         # data generator params
         self.integrator = integrator
         self.dt = dt
+        
+        # training setup
+        self.criterion = nn.MSELoss()
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
+        self.learning_rate = 0.01
 
     def _handle_reservoir_data(self, msg):
         '''
         callback to handle incoming reservoir data
+        trains the readout layer on every message received
         '''
-        try:
-            reservoir_output = self._msg_to_layer(msg)
-            results = self.model(reservoir_output)
-            # TODO :: RESULTS GETS PASSED TO LOGGER
-        except Exception as e:
-            ### In _handle_params you do if self.logger is None
-            ### If it can be not initialized then it is technically
-            ### possible for it to not be initialized at any point
-            ### Maybe a function that checks and returns the logger??
-            self.get_logger().error(f"Error handling reservoir data: {e}")
+        if self.training:
+            try:
+                # Convert message to tensor
+                reservoir_output = self._msg_to_layer(msg)
+                
+                # Get ground truth target from last generated data batch
+                if len(self.logger.data_hist) > 0:
+                    # Use the last generated data as target
+                    target = torch.tensor(self.logger.gst_data_hist[:,-self.msg_length:-1], dtype=torch.float32, device=self.device).T
+                    # Train on this message immediately
+                    self._train_readout(reservoir_output, target)
+                    
+            except Exception as e:
+                self.get_logger().error(f"Error handling reservoir data: {e}")
+
+        else:
+
 
     def _handle_params(self, msg):
         '''
         callback to handle parameter updates from edge
+        extracts reservoir parameters from dict message
         '''
-        if self.logger is None: ### You use logger like 6 other times and you dont do this there
-            self.logger = Logger(self.function, params, self.get_logger())
-        self.get_logger().info(f"Received parameters: {msg.data}")
-        self.connected_to_edge = True
+        if self.connected_to_edge:
+            return
+        try:
+            # Extract reservoir dimensions and parameters from the dict
+            self.res_dim = msg.get('res_dim')
+            self.get_logger().info(f"Received reservoir parameters: res_dim={self.res_dim}")
+            self.connected_to_edge = True
+        except Exception as e:
+            self.get_logger().error(f"Error handling parameters: {e}")
 
     def _msg_to_layer(self, msg):
         '''
@@ -103,55 +124,84 @@ class Agent_ROSNode(Node):
         msg = Float32MultiArray() # is this required?
         msg.data = np.asarray(u, dtype=np.float32).flatten().tolist()
         return msg
+
     
-    def _send_data(self, msg):
+    def _train_readout(self, reservoir_output, target):
         '''
-        send data to edge network
+        train the readout layer on a single message
+        reservoir_output: tensor of shape (batch_size * input_dim,) or (batch_size, input_dim)
+        target: tensor of shape (batch_size, output_dim)
         '''
-        self.data_publisher.publish(msg)
+        try:
+            # Ensure proper dimensions for batch training
+            if reservoir_output.dim() == 1:
+                reservoir_output = reservoir_output.unsqueeze(0)
+            if target.dim() == 1:
+                target = target.unsqueeze(0)
+            
+            # Forward pass
+            predictions = self.model(reservoir_output)
+            
+            # Compute loss
+            loss = self.criterion(predictions, target)
+            
+            # Backward pass
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+            
+            self.logger.training_loss.append(loss.item)
+
+            self.get_logger().debug(f"Training loss: {loss.item():.6f}")
+            
+        except Exception as e:
+            self.get_logger().error(f"Error training readout layer: {e}")
     
     def _generate_data(self, t0, ic):
         '''
-        wrapper for rk45 
+        wrapper for rk45
+        take in some time and IC and advance the integration by  
         '''
-        tspan = np.linspace(t0, self.msg_length*self.dt, self.msg_length)
-        sol = solve_ivp(self.func, [t0, self.msg_length*self.dt], ic, t_eval=tspan, method=self.integrator)
+        tspan = np.linspace(t0, t0 + self.msg_length*self.dt, self.msg_length)
+        sol = solve_ivp(self.func, [t0, t0 + self.msg_length*self.dt], ic, t_eval=tspan, method=self.integrator)
+        self.logger.gst_data_hist.append(sol.y)
+        self.logger.time_step_hist.append(sol.t)
         return sol.y, sol.t
     
-    ### This is fine but technically inconsistent with your naming scheme
-    ### Are these functions to meant be exposed? 
-    ### Python convention is _ before function name for "private" internal functions
-    def send_batch_to_res(self,t_curr):
+    def _send_batch_to_res(self,t_curr):
         '''
         generate data and send batch of data to 
         '''
         # Generate data using the dynamical function
-        data, time = self._generate_data(t_curr, self.ic)
-        self.data_hist.append(data)
-        self.time_hist.append(time)
-        # Convert output to ROS message and send
-        ### Why is this 2 functions at this point anyways?
-        ### Send Data is a single line anyways
+        data, _ = self._generate_data(t_curr, self.ic)
         msg = self._data_to_msg(data)
-        self._send_data(msg)
+        self.data_publisher(msg)
         # Update initial conditions
         self.ic = data[:, -1]  # Last state becomes next initial condition
         self.get_logger().debug(f"Generated and sent data batch at t=[{t_curr},{t_curr+self.msg_length*self.dt})")
 
+    def _pred_with_res(self):
+        _._ = self._generate_data(self.t_curr,)
+
+
     ###same as send_batch_to_res
-    def run(self):
+    def _run(self):
         '''
         Main node spin loop: generates data, feeds through reservoir, sends output
         '''
-        t_curr = 0.0
-        
-        while len(self.time_hist) <= self.training_length:
+        if self.t_curr <= self.training_length:
             try:
-                self.send_batch_to_res(t_curr)
-                #update time for next iteration
-                t_curr += self.msg_length * self.dt
+                self.training = True
+                self._send_batch_to_res(t_curr)
+                self.t_curr += self.msg_length * self.dt
+            except Exception as e:
+                self.get_logger().error(f"Error in node spin: {e}")           
+        else:
+            try:
+                self.training = False
+                self._pred_with_res(self.t_curr)
+                self.t_curr += self.msg_length * self.dt
             except Exception as e:
                 self.get_logger().error(f"Error in node spin: {e}")
-                break
-    
+                
       

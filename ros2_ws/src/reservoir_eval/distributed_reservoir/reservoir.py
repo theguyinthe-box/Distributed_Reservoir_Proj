@@ -22,7 +22,7 @@ class Reservoir(nn.Module):
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.seed =seed 
+        self.seed = seed 
 
         # instantiate random weight matrix
         if weight is None:
