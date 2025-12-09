@@ -15,27 +15,20 @@ class Logger:
     _INT_KEYS = {"units"}
     _FLOAT_TOL = 1e-9  # Tolerance for float equality checks
 
-    def __init__(self, model_type: str, hyperparams: dict, ros_logger,
+    def __init__(self, model_type: str, ros_logger,
                  results_dir: Optional[str] = None, results_filename: Optional[str] = None):
+        
         self.model_type = model_type.upper()
-        self.hyperparams = hyperparams
         self.ros_logger = ros_logger
         self.model_size = None
 
-        # Metrics
-        self.mse_list: List[float] = []
-        self.roundtrip_times: List[float] = []      # seconds
-        self.pred_time_avgs: List[float] = []       # ms
-        self.pred_time_mins: List[float] = []       # ms
-        self.pred_time_maxs: List[float] = []       # ms
-        self.run_infos: List[Dict[str, Any]] = []
+        self.time_step_hist = []
+        self.gst_data_hist = []
+        
+        self.pred_time = []
+        self.pred_hist = []
 
-        # Additional metrics
-        self.training_time_s: float = 0.0
-        self.experiment_start_time: float = time.time()
-
-        # Count warm-ups
-        self.warmup_count: int = 0
+        self.training_loss = []
 
         # Path / filename
         if results_filename is None:
@@ -46,19 +39,11 @@ class Logger:
 
         self.ros_logger.info("=" * 60)
         self.ros_logger.info(f"Starting {self.model_type} Evaluation")
-        self.ros_logger.info("Hyperparameters:")
-        for k, v in self.hyperparams.items():
-            self.ros_logger.info(f"   - {k}: {v}")
         self.ros_logger.info("=" * 60)
         self.ros_logger.info(f"Results will be stored at: {self.results_path}")
 
     def set_training_time(self, seconds: float):
         self.training_time_s = float(seconds)
-
-    def log_warmup(self, run_count, roundtrip_time_s):
-        roundtrip_ms = roundtrip_time_s * 1000.0
-        self.warmup_count += 1
-        self.ros_logger.info(f"Warm-up {run_count} finished in {roundtrip_ms:.2f} ms")
 
     def set_model_size(self, size_mb: float):
         self.model_size = float(size_mb)
