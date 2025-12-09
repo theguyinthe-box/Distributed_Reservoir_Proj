@@ -4,6 +4,7 @@ from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray, String
 from sklearn.preprocessing import StandardScaler
 import numpy as np
+import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 import torch.nn as nn
@@ -56,7 +57,7 @@ class Edge_ROSNode(Node):
         tranlate to nodes
         '''
         return torch.tensor(msg.data, dtype=torch.float32, device=self.device)
-    
+   
     def _data_to_msg(self, u):
         '''
         translate data to ROS msg

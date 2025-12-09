@@ -20,8 +20,8 @@ class Agent_ROSNode(Node):
                  ic = [0.1,0.1,0.1], 
                  dt = .001,
                  integrator: str = 'RK45',
-                 training_length = 1000,
-                 batch_size = 1):
+                 training_length = 500,
+                 batch_size = 20):
     
         super().__init__(f'{func}_agent_node')
 
@@ -175,7 +175,7 @@ class Agent_ROSNode(Node):
         # Generate data using the dynamical function
         data, _ = self._generate_data(t_curr, self.ic)
         msg = self._data_to_msg(data)
-        self.data_publisher.publish(msg)
+        self._send_data(msg)
         # Update initial conditions
         self.ic = data[:, -1]  # Last state becomes next initial condition
         self.get_logger().debug(f"Generated and sent data batch at t=[{t_curr},{t_curr+self.msg_length*self.dt})")
