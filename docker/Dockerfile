@@ -42,8 +42,7 @@ RUN pip3 install --no-cache-dir \
     numpy \
     scipy \
     scikit-learn \
-    pandas \
-    rclpy
+    pandas
 
 # Copy built workspace from stage 1
 COPY --from=ros-builder /ros2_ws /ros2_ws
