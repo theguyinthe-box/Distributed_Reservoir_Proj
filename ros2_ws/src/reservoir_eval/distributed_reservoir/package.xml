@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>reservoir_eval</name>
+  <version>0.0.1</version>
+  <description>Distributed Reservoir Computing Evaluation</description>
+  <maintainer email="user@example.com">User</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+
+  <exec_depend>numpy</exec_depend>
+  <exec_depend>scipy</exec_depend>
+  <exec_depend>scikit-learn</exec_depend>
+  <exec_depend>torch</exec_depend>
+  <exec_depend>pandas</exec_depend>
+</package>
