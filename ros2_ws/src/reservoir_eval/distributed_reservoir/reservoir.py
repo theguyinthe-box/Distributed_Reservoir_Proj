@@ -12,7 +12,7 @@ class Reservoir(nn.Module):
                  bias_scale = 0.1,
                  spectral_radius = 1,
                  det_norm = None,
-                 leak_rate = 1,
+                 leak_rate = .2,
                  sparsity = 0,
                  powerlaw_alpha = 1.75,
                  seed = 42,
@@ -54,7 +54,7 @@ class Reservoir(nn.Module):
     def forward(self, x, n_steps = 1):
         with torch.no_grad():
             for _ in range(n_steps):
-                y = x @ self.weight + self.bias
+                y = x @ self.weight + self.state @ self.adjacency + self.bias
                 y = (1-self.leak_rate)* self.state \
                     + self.leak_rate*self.activation(y)
                 self.state = y
