@@ -1,14 +1,16 @@
 from setuptools import setup
 
+package_name = 'distributed_reservoir'
+
 setup(
-    name='reservoir_eval',
-    version='0.0.1',
-    packages=['distributed_reservoir'],
+    name=package_name,
+    version='0.0.0',
+    packages=[package_name],
     install_requires=['rclpy', 'std_msgs', 'numpy', 'scipy', 'scikit-learn', 'torch', 'pandas'],
     entry_points={
         'console_scripts': [
-            'agent = distributed_reservoir.agent:main',
-            'edge = distributed_reservoir.edge_server:main',
+            'agent = ' + package_name + '.agent:main',
+            'edge = ' + package_name + '.edge_server:main',
         ],
     },
 )
