@@ -1,4 +1,6 @@
 # Stage 1: Build ROS workspace
+ARG CUDA_VERSION=12.4
+
 FROM ros:humble-ros-core AS ros-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -19,7 +21,9 @@ RUN bash -c 'source /opt/ros/humble/setup.bash && \
     colcon build --symlink-install'
 
 # Stage 2: Final image with PyTorch
-FROM pytorch/pytorch:2.0.1-runtime-cuda11.8-runtime-ubuntu22.04
+# ensure that your cuda version matches on the system
+# the torch version may be deprecated if you use this a few years down the line and require refactoring
+FROM pytorch/pytorch:2.4.1-cuda${CUDA_VERSION}-cudnn9-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
