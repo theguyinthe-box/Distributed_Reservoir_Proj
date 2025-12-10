@@ -14,7 +14,7 @@ from reservoir import Reservoir
 from functions import dynamical_functions as d
 
 class Edge_ROSNode(Node):
-    def __init__(self, func: str, 
+    def __init__(self, func: str = 'lorenz', 
                  res_dim: int = 500,
                  spectral_radius: float = 1.6,
                  leak_rate: float = 0.15,

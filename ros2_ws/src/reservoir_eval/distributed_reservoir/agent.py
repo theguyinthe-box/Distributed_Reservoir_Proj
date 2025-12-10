@@ -17,7 +17,7 @@ from logger import Logger
 
 class Agent_ROSNode(Node):
     def __init__(self, 
-                 func: str, 
+                 func: str = 'lorenz', 
                  ic = [0.1,0.1,0.1], 
                  dt = .01,
                  integrator: str = 'RK45',
