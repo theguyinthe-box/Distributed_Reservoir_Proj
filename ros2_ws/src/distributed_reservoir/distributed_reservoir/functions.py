@@ -1,6 +1,7 @@
 
 class dynamical_functions:
-
+    
+    @staticmethod
     def return_function(func: str):
         #return reference to the function string input
         functions = {
@@ -9,11 +10,12 @@ class dynamical_functions:
             'lorenz': dynamical_functions.lorenz
         }
         try:
-            return functions(func)
+            return functions[func]
         except:
             print(f"{func} not defined")
             # want to make this fail the ros node gracefully
     
+    @staticmethod
     def function_dims(func: str):
         # return output dimension of function
         functions = {
@@ -22,7 +24,7 @@ class dynamical_functions:
             'lorenz': 3
         }
         try:
-            return functions(func)
+            return functions[func]
         except:
             print(f"{func} not defined")
             # want to make this fail the ros node gracefully

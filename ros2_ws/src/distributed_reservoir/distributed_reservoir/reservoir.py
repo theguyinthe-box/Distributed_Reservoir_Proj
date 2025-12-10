@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.utils.parametrizations import orthogonal, _make_orthogonal
 
 class Reservoir(nn.Module):
@@ -26,11 +27,11 @@ class Reservoir(nn.Module):
 
         # instantiate random weight matrix
         if weight is None:
-            weight = random_powerlaw_matrix(res_dim,
-                                            alpha = powerlaw_alpha,
-                                            normalize_radius_to = spectral_radius,
-                                            normalize_det_to = det_norm,
-                                            sparsity = sparsity)
+            weight = self.random_powerlaw_matrix(res_dim,
+                                                 alpha = powerlaw_alpha,
+                                                 normalize_radius_to = spectral_radius,
+                                                 normalize_det_to = det_norm,
+                                                 sparsity = sparsity)
             initial_bias = 2 * torch.rand(res_dim) - 1
             bias_sum = initial_bias.sum()
             initial_bias -= bias_sum / res_dim
@@ -46,10 +47,10 @@ class Reservoir(nn.Module):
         
         #leak rate $\gamma
         self.leak_rate = leak_rate
-        #activation function plus kwargs for activation function
-        self.activation = activation(**activation_kwargs)
+        #activation function - default to tanh
+        self.activation = lambda x: torch.tanh(x)
         #prev output of all nodes
-        self.state = np.zeroes((res_dim,res_dim), dtype=np.float64)
+        self.state = np.zeros((res_dim,res_dim), dtype=np.float64)
 
     def forward(self, x, n_steps = 1):
         with torch.no_grad():
@@ -59,9 +60,10 @@ class Reservoir(nn.Module):
                     + self.leak_rate*self.activation(y)
                 self.state = y
         return y
-    
-    @staticmethod
-    def powerlaw_random(dim, alpha = 1.75, 
+
+    def powerlaw_random(self, 
+                        dim, 
+                        alpha = 1.75, 
                         x_min = 1):
         '''
         Sample numbers from a powerlaw
@@ -70,21 +72,21 @@ class Reservoir(nn.Module):
         out = x_min * (1 - rands) ** (-1 / (alpha - 1))
         return out
     
-    @staticmethod
-    def random_powerlaw_matrix(dim, 
-                           out_dim = None, 
-                           alpha = 1.75, 
-                           x_min = 0.1,
-                           normalize_det_to = None, 
-                           normalize_radius_to = 1,
-                           sparsity = 0.0):
+    def random_powerlaw_matrix(self,
+                               dim, 
+                               out_dim = None, 
+                               alpha = 1.75,
+                               x_min = 0.1,
+                               normalize_det_to = None, 
+                               normalize_radius_to = 1,
+                               sparsity = 0.0):
         '''
         Generates random weights of the reservoir in a powerlaw matrix    
         '''
         if out_dim is None:
             out_dim = dim
 
-        diagonal = Reservoir.powerlaw_random(out_dim, alpha = alpha, x_min = x_min)
+        diagonal = self.powerlaw_random(dim, alpha = alpha, x_min = x_min)
 
         if normalize_det_to is not None:
             log_det = torch.log(diagonal).sum()
@@ -106,9 +108,14 @@ class Reservoir(nn.Module):
 
 class Readout(nn.Module):
     def __init__(self,
-                 res_dim,
-                 io_dim):
+                 res_dim: int,
+                 io_dim: int,
+                 lr: float = 0.001):
         
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.readout = nn.linear(res_dim,io_dim).to(self.device)
+        self.readout = nn.Linear(res_dim,io_dim).to(self.device)
+        self.criterion = nn.MSELoss()
+        self.optimizer = torch.optim.Adam(self.parameters(), lr)
+
+        

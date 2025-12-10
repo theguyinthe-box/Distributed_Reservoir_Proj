@@ -1,19 +1,20 @@
 # Dependency imports
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import Float32MultiArray, String
+import json
 import numpy as np
 from scipy.integrate import solve_ivp
 from sklearn.preprocessing import StandardScaler
 import torch
-from torch.utils.data import DataLoader, TensorDataset
 import torch.nn as nn
 from typing import List, Dict, Any, Optional
 
 # Codebase imports
-from reservoir import Readout
-from functions import dynamical_functions as d
-from logger import Logger
+from .reservoir import Readout
+from .functions import dynamical_functions as d
+from .logger import Logger
 
 class Agent_ROSNode(Node):
     def __init__(self, 
@@ -30,15 +31,14 @@ class Agent_ROSNode(Node):
         # get GPU if available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.training = False
-
         self.res_dim = None
 
         # store function type
         self.function = func
-        self.function_dims = d.function_dims(function)
-        self.func = d.return_function(function)
+        self.function_dims = d.function_dims(self.function)
+        self.func = d.return_function(self.function)
         
-        self.logger = Logger('{func}_agent_node')
+        self.logger = Logger(f'{func}_agent_node', self.get_logger())
 
         self.connected_to_edge = False
 
@@ -46,14 +46,14 @@ class Agent_ROSNode(Node):
         # Subscribe to Edge before creating publishers
         # Init Subscribers  
         # get params
-        self.reservoir_param_subscriber = self.create_subscription(dict, 'reservoir_params', self._handle_params)
+        qos_profile = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST)
+        self.reservoir_param_subscriber = self.create_subscription(String, 'reservoir_params', self._handle_params, qos_profile)
         # subscribe to reservoir output
-        self.data_subscription = self.create_subscription(Float32MultiArray, f'{func}_res_msg', self._handle_reservoir_data, queue_size = 10)
+        self.data_subscription = self.create_subscription(Float32MultiArray, f'{self.function}_res_msg', self._handle_reservoir_data, qos_profile)
         # Publishers
-        self.data_publisher = self.create_publisher(Float32MultiArray, f'{function}_agent_msg', self._run, queue_size = 10)        
+        self.data_publisher = self.create_publisher(Float32MultiArray, f'{self.function}_agent_msg', qos_profile)        
         
         # generates the linear layers of the 
-        self.model = Readout(self.res_dim, self.function_dim)
 
         # initial condition of the system
         self.t_curr = 0.0
@@ -72,11 +72,9 @@ class Agent_ROSNode(Node):
         self.max_time = training_length + eval_length  # stop after time/dt runs
 
         # training setup
-        self.criterion = nn.MSELoss()
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
-        self.learning_rate = 0.01
-
+        
         self.last_pred = None
+        self._run()
 
     def _handle_reservoir_data(self, msg):
         '''
@@ -99,6 +97,7 @@ class Agent_ROSNode(Node):
                         target = torch.tensor(self.logger.gst_data_hist[:,-1], dtype=torch.float32, device=self.device).T
                     # Train on this message immediately
                     self._train_readout(reservoir_output, target)
+                    
             except Exception as e:
                 self.get_logger().error(f"Error handling reservoir data: {e}")
         else:
@@ -112,21 +111,25 @@ class Agent_ROSNode(Node):
                 prediction = self.model(reservoir_output)
                 self.logger.pred_hist.append(prediction)
                 self.last_pred = prediction
+                
             except Exception as e:
                 self.get_logger().error(f"Error handling reservoir data: {e}")
+        self._run()
 
     def _handle_params(self, msg):
         '''
         callback to handle parameter updates from edge
-        extracts reservoir parameters from dict message
+        extracts reservoir parameters from JSON string message
         '''
         if self.connected_to_edge:
             return
         try:
-            # Extract reservoir dimensions and parameters from the dict
-            self.res_dim = msg.get('res_dim')
+            # Parse JSON string to get parameters
+            params = json.loads(msg.data)
+            self.res_dim = params['res_dim']
             self.get_logger().info(f"Received reservoir parameters: res_dim={self.res_dim}")
             self.connected_to_edge = True
+            self.model = Readout(self.res_dim, self.function_dims)
         except Exception as e:
             self.get_logger().error(f"Error handling parameters: {e}")
 
@@ -161,14 +164,14 @@ class Agent_ROSNode(Node):
             
             # Forward pass
             predictions = self.model(reservoir_output)
-            
+            self.last_pred = predictions
             # Compute loss
-            loss = self.criterion(predictions, target)
+            loss = self.model.criterion(predictions, target)
             
             # Backward pass
-            self.optimizer.zero_grad()
+            self.model.optimizer.zero_grad()
             loss.backward()
-            self.optimizer.step()
+            self.model.optimizer.step()
             
             self.logger.training_loss.append(loss.item)
 
@@ -211,6 +214,7 @@ class Agent_ROSNode(Node):
         _._ = self._generate_data(self.t_curr)
 
 
+
     ###same as send_batch_to_res
     def _run(self):
         '''
@@ -230,7 +234,6 @@ class Agent_ROSNode(Node):
             try:
                 self._pred_with_res()
                 self.t_curr += self.msg_length * self.dt
-                self.run_count += 1
             except Exception as e:
                 self.get_logger().error(f"Error in node spin: {e}")
         
@@ -239,7 +242,6 @@ def main(args=None):
     rclpy.init(args=args)
     node = Agent_ROSNode(func='lorenz')
     rclpy.spin(node)
-    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

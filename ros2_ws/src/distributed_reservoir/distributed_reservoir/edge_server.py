@@ -1,21 +1,23 @@
 # dependency imports
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float32MultiArray, String
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from std_msgs.msg import Float32MultiArray, String 
 from sklearn.preprocessing import StandardScaler
 import numpy as np
-import numpy as np
 import torch
-from torch.utils.data import DataLoader, TensorDataset
 import torch.nn as nn
 from typing import List, Dict, Any, Optional
+import json
 
 # codebase imports
-from reservoir import Reservoir
-from functions import dynamical_functions as d
+from .reservoir import Reservoir
+from .functions import dynamical_functions as d
+
 
 class Edge_ROSNode(Node):
-    def __init__(self, func: str = 'lorenz', 
+    def __init__(self, 
+                 func: str = 'lorenz', 
                  res_dim: int = 256,
                  spectral_radius: float = 1.1,
                  leak_rate: float = 0.15,
@@ -37,9 +39,10 @@ class Edge_ROSNode(Node):
         }
         
         # Publishers / Subscribers
-        self.param_publisher = self.create_publisher(dict, 'reservoir_params', queue_size = 1)
-        self.subscription = self.create_subscription(Float32MultiArray, f'{func}_agent_msg', self._handle_input, queue_size = 10)
-        self.output_publisher = self.create_publisher(Float32MultiArray, f'{func}_res_msg', queue_size = 10)
+        qos_profile = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST)
+        self.param_publisher = self.create_publisher(String, 'reservoir_params', qos_profile)
+        self.subscription = self.create_subscription(Float32MultiArray, f'{func}_agent_msg', self._handle_input, qos_profile)
+        self.output_publisher = self.create_publisher(Float32MultiArray, f'{func}_res_msg', qos_profile)
 
         # instantiate reservoir 
         self.model = Reservoir(res_dim, spectral_radius=spectral_radius, leak_rate=leak_rate)
@@ -66,9 +69,11 @@ class Edge_ROSNode(Node):
     
     def _publish_params(self):
         '''
-        publish reservoir parameters to agent
+        publish reservoir parameters to agent as JSON string
         '''
-        self.param_publisher.publish(self.reservoir_params)
+        msg = String()
+        msg.data = json.dumps(self.reservoir_params)
+        self.param_publisher.publish(msg)
         self.get_logger().info(f"Published reservoir parameters to agent")
     
     def _handle_input(self, msg):
