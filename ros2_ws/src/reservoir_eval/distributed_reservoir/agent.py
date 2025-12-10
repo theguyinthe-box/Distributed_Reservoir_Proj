@@ -8,6 +8,7 @@ from sklearn.preprocessing import StandardScaler
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 import torch.nn as nn
+from typing import List, Dict, Any, Optional
 
 # Codebase imports
 from reservoir import Readout
@@ -68,6 +69,7 @@ class Agent_ROSNode(Node):
         self.integrator = integrator
         self.dt = dt
         self.t_curr = 0
+        self.max_time = training_length + eval_length  # stop after time/dt runs
 
         # training setup
         self.criterion = nn.MSELoss()
@@ -75,9 +77,6 @@ class Agent_ROSNode(Node):
         self.learning_rate = 0.01
 
         self.last_pred = None
-
-        self.max_runs = training_length + eval_length  # Stop after 10 prediction runs
-        self.run_count = 0
 
     def _handle_reservoir_data(self, msg):
         '''
@@ -100,19 +99,21 @@ class Agent_ROSNode(Node):
                         target = torch.tensor(self.logger.gst_data_hist[:,-1], dtype=torch.float32, device=self.device).T
                     # Train on this message immediately
                     self._train_readout(reservoir_output, target)
-                    
             except Exception as e:
                 self.get_logger().error(f"Error handling reservoir data: {e}")
         else:
-            # Convert message to tensor
-            reservoir_output = self._msg_to_layer(msg)
-            #record rtt
-            rtt_seconds = self.logger.record_roundtrip_time(msg.seq)
-            self.get_logger().debug(f"Roundtrip time for seq {msg.seq}: {rtt_seconds*1000:.2f} ms")
-            # Predict through trained readout layer
-            prediction = self.model(reservoir_output)
-            self.logger.pred_hist.append(prediction)
-            self.last_pred = prediction
+            try:
+                # Convert message to tensor
+                reservoir_output = self._msg_to_layer(msg)
+                #record rtt
+                rtt_seconds = self.logger.record_roundtrip_time(msg.seq)
+                self.get_logger().debug(f"Roundtrip time for seq {msg.seq}: {rtt_seconds*1000:.2f} ms")
+                # Predict through trained readout layer
+                prediction = self.model(reservoir_output)
+                self.logger.pred_hist.append(prediction)
+                self.last_pred = prediction
+            except Exception as e:
+                self.get_logger().error(f"Error handling reservoir data: {e}")
 
     def _handle_params(self, msg):
         '''
@@ -215,23 +216,22 @@ class Agent_ROSNode(Node):
         '''
         Main node spin loop: generates data, feeds through reservoir, sends output
         '''
-        if self.t_curr <= self.training_length:
+        if self.t_curr >= self.max_time:
+            # Evaluation complete
+            self.logger.summary()
+            rclpy.shutdown()
+        elif self.training:
             try:
-                self.training = True
                 self._send_batch_to_res()
                 self.t_curr += self.msg_length * self.dt
             except Exception as e:
                 self.get_logger().error(f"Error in node spin: {e}")           
-        elif self.run_count < self.max_runs:
+        elif not self.training:
             try:
-                self.training = False
                 self._pred_with_res()
                 self.t_curr += self.msg_length * self.dt
                 self.run_count += 1
             except Exception as e:
                 self.get_logger().error(f"Error in node spin: {e}")
-        else:
-            # Evaluation complete
-            self.logger.summary()
-            rclpy.shutdown()
+        
 

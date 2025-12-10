@@ -15,16 +15,20 @@ class Logger:
     _INT_KEYS = {"units"}
     _FLOAT_TOL = 1e-9  # Tolerance for float equality checks
 
-    def __init__(self, model_type: str, ros_logger,
-                 results_dir: Optional[str] = None, results_filename: Optional[str] = None):
+    def __init__(self, 
+                 model_type: str, 
+                 ros_logger,
+                 results_dir: Optional[str] = None, 
+                 results_filename: Optional[str] = None):
         
         self.model_type = model_type.upper()
         self.ros_logger = ros_logger
         self.model_size = None
 
         # Data tracking
-        self.time_step_hist = []
+        self.gst_time_step_hist = []
         self.gst_data_hist = []
+
         self.pred_time = []
         self.pred_hist = []
         self.training_loss = []
@@ -34,12 +38,13 @@ class Logger:
         self.send_times = {}  # seq -> send_time
         self.warmup_count = 0
         self.mse_list = []
+
         self.pred_time_avgs = []
         self.pred_time_mins = []
         self.pred_time_maxs = []
-        self.run_infos = []
+        
         self.experiment_start_time = time.time()
-        self.training_time_s = 0.0
+        
 
         # Path / filename
         if results_filename is None:

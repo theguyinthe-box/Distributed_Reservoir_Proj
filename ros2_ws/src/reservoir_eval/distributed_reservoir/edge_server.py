@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 import torch.nn as nn
+from typing import List, Dict, Any, Optional
 
 # codebase imports
 from reservoir import Reservoir
@@ -18,6 +19,7 @@ class Edge_ROSNode(Node):
                  spectral_radius: float = 1.6,
                  leak_rate: float = 0.15,
                  n_iterations: int = 20):
+        
         super().__init__('edge_server_ros_node')    
         
         # get GPU if available
@@ -31,10 +33,6 @@ class Edge_ROSNode(Node):
             "spectral_radius": spectral_radius,
             "leak_rate": leak_rate, 
             "iter": n_iterations
-        }
-
-        self.runtime_params = {
-            "model_path": "/ros2_ws/model.pt",
         }
         
         # Publishers / Subscribers
