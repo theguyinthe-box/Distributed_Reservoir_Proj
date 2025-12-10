@@ -8,7 +8,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-colcon-common-extensions \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /ros2_ws/src
@@ -32,11 +31,10 @@ RUN apt-get update && apt-get install -y \
     curl \
     gnupg2 \
     lsb-release \
-    && curl -sSL https://repo.ros2.org/ros.key | apt-key add - \
-    && echo "deb [arch=$(dpkg --print-architecture)] http://packages.ros2.org/ubuntu jammy main" > /etc/apt/sources.list.d/ros2.list \
-    && apt-get update && apt-get install -y \
-    ros-humble-ros-core \
-    python3-colcon-common-extensions \
+    && export ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F "tag_name" | awk -F\" '{print $4}') \
+    && curl -L -o /tmp/ros2-apt-source.deb "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.$(. /etc/os-release && echo ${UBUNTU_CODENAME:-${VERSION_CODENAME}})_all.deb" \
+    && dpkg -i /tmp/ros2-apt-source.deb \
+    && apt-get update && apt-get install -y ros-humble-ros-base \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
@@ -45,7 +43,6 @@ RUN pip3 install --no-cache-dir \
     scipy \
     scikit-learn \
     pandas \
-    openpyxl \
     rclpy
 
 # Copy built workspace from stage 1

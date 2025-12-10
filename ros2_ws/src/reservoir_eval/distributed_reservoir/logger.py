@@ -6,8 +6,6 @@ import math
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-import pandas as pd
-
 class Logger:
     # Keys used to match for upsert/overwrite
     _MATCH_KEYS = ["units", "spectral_radius", "leaking_rate", "input_scaling", "ridge_alpha"]
