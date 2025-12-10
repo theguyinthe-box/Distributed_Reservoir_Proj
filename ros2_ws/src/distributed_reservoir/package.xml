@@ -4,8 +4,6 @@
   <name>reservoir_eval</name>
   <version>0.0.1</version>
   <description>Distributed Reservoir Computing Evaluation</description>
-  <maintainer email="user@example.com">User</maintainer>
-  <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
@@ -15,4 +13,8 @@
   <exec_depend>scikit-learn</exec_depend>
   <exec_depend>torch</exec_depend>
   <exec_depend>pandas</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
 </package>

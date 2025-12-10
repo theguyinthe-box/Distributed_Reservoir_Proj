@@ -235,3 +235,11 @@ class Agent_ROSNode(Node):
                 self.get_logger().error(f"Error in node spin: {e}")
         
 
+def main(args=None):
+    rclpy.init(args=args)
+    node = Agent_ROSNode(func='lorenz')
+    rclpy.spin(node)
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()

@@ -1,4 +1,5 @@
 # dependency imports
+import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray, String
 from sklearn.preprocessing import StandardScaler
@@ -15,8 +16,8 @@ from functions import dynamical_functions as d
 
 class Edge_ROSNode(Node):
     def __init__(self, func: str = 'lorenz', 
-                 res_dim: int = 500,
-                 spectral_radius: float = 1.6,
+                 res_dim: int = 256,
+                 spectral_radius: float = 1.1,
                  leak_rate: float = 0.15,
                  n_iterations: int = 20):
         
@@ -95,3 +96,12 @@ class Edge_ROSNode(Node):
             self.get_logger().error(f"Error in _handle_input: {e}")
             import traceback
             traceback.print_exc()
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = Edge_ROSNode(func='lorenz')
+    rclpy.spin(node)
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
