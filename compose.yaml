@@ -1,23 +1,35 @@
 services:
-  agent:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
-    command: ["/entrypoints/agent_entrypoint.sh"]
-    volumes:
-      - ./results:/results
-    networks:
-      - ros_docker_reservoir
-
   edge:
     build:
       context: .
       dockerfile: docker/Dockerfile
     command: ["/entrypoints/edge_entrypoint.sh"]
-    volumes:
-      - ./hyperparams.xlsx:/hyperparams.xlsx:ro
     networks:
       - ros_docker_reservoir
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  agent:
+      build:
+        context: .
+        dockerfile: docker/Dockerfile
+      command: ["/entrypoints/agent_entrypoint.sh"]
+      volumes:
+        - ./results:/results
+      networks:
+        - ros_docker_reservoir
+      deploy:
+        resources:
+          reservations:
+            devices:
+              - driver: nvidia
+                count: 1
+                capabilities: [gpu]
 
 networks:
   ros_docker_reservoir:

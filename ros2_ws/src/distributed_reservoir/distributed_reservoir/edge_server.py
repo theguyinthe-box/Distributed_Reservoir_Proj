@@ -29,23 +29,31 @@ class Edge_ROSNode(Node):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # hyper parameters
+
+        
+        # Publishers / Subscribers
+        qos_profile = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST)
+
+        self.agent_ready_subscriber = self.create_subscription(String, 'agent_ready', self._handle_agent_ready, qos_profile)
+        self.param_publisher = self.create_publisher(String, 'reservoir_params', qos_profile)
+        self.ready_publisher = self.create_publisher(String, 'edge_ready', qos_profile)
+        self.subscription = self.create_subscription(Float32MultiArray, f'{func}_agent_msg', self._handle_input, qos_profile)
+        self.output_publisher = self.create_publisher(Float32MultiArray, f'{func}_res_msg', qos_profile)
+
         input_dim = d.function_dims(func)
         self.reservoir_params = {
-            "input_dim": input_dim, 
             "res_dim": res_dim,
+            "input_dim": input_dim,
             "spectral_radius": spectral_radius,
             "leak_rate": leak_rate, 
             "iter": n_iterations
         }
-        
-        # Publishers / Subscribers
-        qos_profile = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST)
-        self.param_publisher = self.create_publisher(String, 'reservoir_params', qos_profile)
-        self.subscription = self.create_subscription(Float32MultiArray, f'{func}_agent_msg', self._handle_input, qos_profile)
-        self.output_publisher = self.create_publisher(Float32MultiArray, f'{func}_res_msg', qos_profile)
 
         # instantiate reservoir 
-        self.model = Reservoir(res_dim, spectral_radius=spectral_radius, leak_rate=leak_rate)
+        self.model = Reservoir(res_dim=self.reservoir_params['res_dim'],
+                               input_dim=self.reservoir_params['input_dim'],
+                               spectral_radius=self.reservoir_params['spectral_radius'], 
+                               leak_rate=self.reservoir_params['leak_rate']).to(self.device)
         
         # publish parameters to agent
         self._publish_params()
@@ -64,7 +72,7 @@ class Edge_ROSNode(Node):
         translate data to ROS msg
         '''
         msg = Float32MultiArray()
-        msg.data = np.asarray(u, dtype=np.float32).flatten().tolist()
+        msg.data = torch.asarray(u, dtype=torch.float32).flatten().tolist()
         return msg
     
     def _publish_params(self):
@@ -85,22 +93,39 @@ class Edge_ROSNode(Node):
         try:
             # Convert incoming message to tensor
             input_data = self._msg_to_layer(msg)
-            self.get_logger().debug(f"Received input data (seq {msg.seq}) with shape: {input_data.shape}")
-            
+
+            # Reshape to (batch_size, input_dim)
+            input_data = input_data.reshape(-1, self.reservoir_params['input_dim'])
+
             # Process through reservoir
             output_data = self.model.forward(input_data, n_steps=self.reservoir_params['iter'])
             self.get_logger().debug(f"Reservoir output shape: {output_data.shape}")
-            
+
             # Convert output to message and publish
             output_msg = self._data_to_msg(output_data)
-            output_msg.seq = msg.seq  # Preserve sequence number
+
+            #output_msg.seq = msg.seq  # Preserve sequence number
+
             self.output_publisher.publish(output_msg)
-            self.get_logger().debug(f"Published reservoir output for seq {msg.seq}")
-            
+
+            self.get_logger().debug(f"Published reservoir output for")
+
         except Exception as e:
             self.get_logger().error(f"Error in _handle_input: {e}")
             import traceback
             traceback.print_exc()
+    
+    def _handle_agent_ready(self, msg):
+        '''
+        callback to handle agent readiness signal
+        respond with edge readiness to complete handshake
+        '''
+        if msg.data == "READY":
+            self.get_logger().info("Received READY signal from agent, completing handshake...")
+            response = String()
+            response.data = "READY"
+            self.ready_publisher.publish(response)
+            self.get_logger().info("Sent READY signal to agent, handshake complete")
 
 def main(args=None):
     rclpy.init(args=args)
