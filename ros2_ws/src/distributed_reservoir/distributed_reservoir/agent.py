@@ -24,7 +24,7 @@ class Agent_ROSNode(Node):
                  integrator: str = 'RK45',
                  training_length = 100,
                  eval_length = 100,
-                 batch_size = 1):
+                 batch_size = 2):
 
     
         super().__init__(f'{func}_agent_node')
@@ -346,13 +346,13 @@ class Agent_ROSNode(Node):
                 self.logger.summary()
                 rclpy.shutdown()
             elif self.t_curr < self.training_length:
-                self.get_logger().debug("training")
+                #self.get_logger().debug("training")
                 # Training phase: send real data
                 self._send_batch_to_res()
                 self.t_curr += self.msg_length * self.dt
                 self.training = True
             else:
-                self.get_logger().debug("evaluating")
+                #self.get_logger().info("evaluating")
                 # Evaluation phase: use predictions as input
                 if self.last_pred is not None:
                     self._pred_with_res()
@@ -367,7 +367,7 @@ class Agent_ROSNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = Agent_ROSNode(func='rossler')
+    node = Agent_ROSNode(func='lorenz')
     rclpy.spin(node)
 
 if __name__ == '__main__':

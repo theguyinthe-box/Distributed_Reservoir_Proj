@@ -1,0 +1,11 @@
+{
+  "model_type": "ROSSLER_AGENT_NODE",
+  "experiment_duration_s": 75.7371575832367,
+  "num_messages": 5001,
+  "avg_roundtrip_time_s": 0,
+  "min_roundtrip_time_s": 0,
+  "max_roundtrip_time_s": 0,
+  "avg_training_loss": 11.529107558372091,
+  "num_predictions": 2500,
+  "timestamp": "2025-12-16T04:40:11.480070"
+}

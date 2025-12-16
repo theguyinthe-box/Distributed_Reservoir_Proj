@@ -1,11 +1,11 @@
 {
   "model_type": "LORENZ_AGENT_NODE",
-  "experiment_duration_s": 31.483988046646118,
-  "num_messages": 1001,
+  "experiment_duration_s": 75.78427958488464,
+  "num_messages": 5001,
   "avg_roundtrip_time_s": 0,
   "min_roundtrip_time_s": 0,
   "max_roundtrip_time_s": 0,
-  "avg_training_loss": 88.19251359810124,
-  "num_predictions": 2000,
-  "timestamp": "2025-12-12T05:33:28.388510"
+  "avg_training_loss": 41.90617482970832,
+  "num_predictions": 2500,
+  "timestamp": "2025-12-16T04:46:40.047289"
 }

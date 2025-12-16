@@ -22,8 +22,8 @@ def plot_ground_truth_vs_predictions(results_dir='./results', output_file=None):
     results_path = Path(results_dir)
     
     # Load data
-    gt_file = results_path / 'lorenz_agent_node_groundtruth.csv'
-    pred_file = results_path / 'lorenz_agent_node_predictions.csv'
+    gt_file = results_path / 'rossler_agent_node_groundtruth.csv'
+    pred_file = results_path / 'rossler_agent_node_predictions.csv'
     
     if not gt_file.exists():
         print(f"Error: Ground truth file not found: {gt_file}")
@@ -43,7 +43,7 @@ def plot_ground_truth_vs_predictions(results_dir='./results', output_file=None):
     
     # Create figure with subplots
     fig, axes = plt.subplots(3, 1, figsize=(14, 10))
-    fig.suptitle('Lorenz System: Ground Truth vs Reservoir Predictions', fontsize=16, fontweight='bold')
+    fig.suptitle('Rossler System: Ground Truth vs Reservoir Predictions', fontsize=16, fontweight='bold')
     
     # Time indices
     gt_time = np.arange(len(groundtruth))
@@ -114,8 +114,8 @@ def plot_3d_trajectories(results_dir='./results', output_file=None):
     results_path = Path(results_dir)
     
     # Load data
-    gt_file = results_path / 'lorenz_agent_node_groundtruth.csv'
-    pred_file = results_path / 'lorenz_agent_node_predictions.csv'
+    gt_file = results_path / 'rossler_agent_node_groundtruth.csv'
+    pred_file = results_path / 'rossler_agent_node_predictions.csv'
     
     if not gt_file.exists() or not pred_file.exists():
         print("Error: Missing CSV files")
@@ -141,7 +141,7 @@ def plot_3d_trajectories(results_dir='./results', output_file=None):
     ax.set_xlabel('X', fontsize=12)
     ax.set_ylabel('Y', fontsize=12)
     ax.set_zlabel('Z', fontsize=12)
-    ax.set_title('Lorenz Attractor: Ground Truth vs Predictions', fontsize=14, fontweight='bold')
+    ax.set_title('Rossler Attractor: Ground Truth vs Predictions', fontsize=14, fontweight='bold')
     ax.legend(fontsize=11)
     
     plt.tight_layout()
