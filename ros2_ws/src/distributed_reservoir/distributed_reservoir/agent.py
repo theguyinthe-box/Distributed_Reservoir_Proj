@@ -29,6 +29,21 @@ class Agent_ROSNode(Node):
     
         super().__init__(f'{func}_agent_node')
 
+        # Declare and read ROS2 parameters
+        self.declare_parameter('func', func)
+        self.declare_parameter('dt', dt)
+        self.declare_parameter('integrator', integrator)
+        self.declare_parameter('training_length', training_length)
+        self.declare_parameter('eval_length', eval_length)
+        self.declare_parameter('batch_size', batch_size)
+        
+        func = self.get_parameter('func').value
+        dt = self.get_parameter('dt').value
+        integrator = self.get_parameter('integrator').value
+        training_length = self.get_parameter('training_length').value
+        eval_length = self.get_parameter('eval_length').value
+        batch_size = self.get_parameter('batch_size').value
+
         # get GPU if available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
@@ -367,7 +382,13 @@ class Agent_ROSNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = Agent_ROSNode(func='lorenz')
+    
+    # Default parameters (can be overridden via ROS2 launch files or environment variables)
+    func = 'lorenz'  # or 'rossler'
+    
+    node = Agent_ROSNode(
+        func=func
+    )
     rclpy.spin(node)
 
 if __name__ == '__main__':

@@ -1,0 +1,8 @@
+/**:
+  ros__parameters:
+    func: "rossler"
+    model_type: "reservoir"
+    res_dim: 256
+    spectral_radius: 1.1
+    leak_rate: 0.15
+    n_iterations: 20

@@ -17,7 +17,8 @@ from .functions import dynamical_functions as d
 
 class Edge_ROSNode(Node):
     def __init__(self, 
-                 func: str = 'lorenz', 
+                 func: str = 'lorenz',
+                 model_type: str = 'reservoir',
                  res_dim: int = 256,
                  spectral_radius: float = 1.1,
                  leak_rate: float = 0.15,
@@ -25,8 +26,30 @@ class Edge_ROSNode(Node):
         
         super().__init__('edge_server_ros_node')    
         
+        # Declare and read ROS2 parameters
+        self.declare_parameter('func', func)
+        self.declare_parameter('model_type', model_type)
+        self.declare_parameter('res_dim', res_dim)
+        self.declare_parameter('spectral_radius', spectral_radius)
+        self.declare_parameter('leak_rate', leak_rate)
+        self.declare_parameter('n_iterations', n_iterations)
+        
+        func = self.get_parameter('func').value
+        model_type = self.get_parameter('model_type').value
+        res_dim = self.get_parameter('res_dim').value
+        spectral_radius = self.get_parameter('spectral_radius').value
+        leak_rate = self.get_parameter('leak_rate').value
+        n_iterations = self.get_parameter('n_iterations').value
+        
         # get GPU if available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Store configuration
+        self.func = func
+        self.model_type = model_type.lower()
+        
+        if self.model_type not in ['reservoir', 'lstm']:
+            raise ValueError(f"model_type must be 'reservoir' or 'lstm', got '{self.model_type}'")
         
         # hyper parameters
 
@@ -37,8 +60,8 @@ class Edge_ROSNode(Node):
         self.agent_ready_subscriber = self.create_subscription(String, 'agent_ready', self._handle_agent_ready, qos_profile)
         self.param_publisher = self.create_publisher(String, 'reservoir_params', qos_profile)
         self.ready_publisher = self.create_publisher(String, 'edge_ready', qos_profile)
-        self.subscription = self.create_subscription(Float32MultiArray, f'{func}_agent_msg', self._handle_input, qos_profile)
-        self.output_publisher = self.create_publisher(Float32MultiArray, f'{func}_res_msg', qos_profile)
+        self.subscription = self.create_subscription(Float32MultiArray, f'{self.func}_agent_msg', self._handle_input, qos_profile)
+        self.output_publisher = self.create_publisher(Float32MultiArray, f'{self.func}_res_msg', qos_profile)
 
         input_dim = d.function_dims(func)
         self.reservoir_params = {
@@ -46,19 +69,23 @@ class Edge_ROSNode(Node):
             "input_dim": input_dim,
             "spectral_radius": spectral_radius,
             "leak_rate": leak_rate, 
-            "iter": n_iterations
+            "iter": n_iterations,
+            "model_type": self.model_type
         }
 
-        # instantiate reservoir 
-        self.model = Reservoir(res_dim=self.reservoir_params['res_dim'],
-                               input_dim=self.reservoir_params['input_dim'],
-                               spectral_radius=self.reservoir_params['spectral_radius'], 
-                               leak_rate=self.reservoir_params['leak_rate']).to(self.device)
+        # instantiate model based on model_type
+        if self.model_type == 'reservoir':
+            self.model = Reservoir(res_dim=self.reservoir_params['res_dim'],
+                                   input_dim=self.reservoir_params['input_dim'],
+                                   spectral_radius=self.reservoir_params['spectral_radius'], 
+                                   leak_rate=self.reservoir_params['leak_rate']).to(self.device)
+        elif self.model_type == 'lstm':
+            #TODO: Define and instantiate LSTM model
         
         # publish parameters to agent
         self._publish_params()
         
-        self.get_logger().info(f"Edge reservoir node ready. Reservoir: {res_dim}D, Input: {input_dim}D")
+        self.get_logger().info(f"Edge {self.model_type} node ready. Model: {res_dim}D, Input: {input_dim}D, Function: {self.func}")
 
     def _msg_to_layer(self, msg):
         '''
@@ -129,7 +156,15 @@ class Edge_ROSNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = Edge_ROSNode(func='lorenz')
+    
+    # Default parameters (can be overridden via ROS2 launch files or environment variables)
+    func = 'lorenz'  # or 'rossler'
+    model_type = 'reservoir'  # or 'lstm'
+    
+    node = Edge_ROSNode(
+        func=func,
+        model_type=model_type,
+    )
     rclpy.spin(node)
     rclpy.shutdown()
 
