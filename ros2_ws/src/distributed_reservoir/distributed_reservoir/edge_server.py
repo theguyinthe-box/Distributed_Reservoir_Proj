@@ -11,6 +11,7 @@ from typing import List, Dict, Any, Optional
 import json
 
 # codebase imports
+from .lstm import LSTMModel
 from .reservoir import Reservoir
 from .functions import dynamical_functions as d
 
@@ -22,7 +23,9 @@ class Edge_ROSNode(Node):
                  res_dim: int = 256,
                  spectral_radius: float = 1.1,
                  leak_rate: float = 0.15,
-                 n_iterations: int = 20):
+                 n_iterations: int = 20,
+                 lstm_hidden_size: int = 64,
+                 lstm_num_layers: int = 3):
         
         super().__init__('edge_server_ros_node')    
         
@@ -33,6 +36,8 @@ class Edge_ROSNode(Node):
         self.declare_parameter('spectral_radius', spectral_radius)
         self.declare_parameter('leak_rate', leak_rate)
         self.declare_parameter('n_iterations', n_iterations)
+        self.declare_parameter('lstm_hidden_size', lstm_hidden_size)
+        self.declare_parameter('lstm_num_layers', lstm_num_layers)
         
         func = self.get_parameter('func').value
         model_type = self.get_parameter('model_type').value
@@ -40,6 +45,8 @@ class Edge_ROSNode(Node):
         spectral_radius = self.get_parameter('spectral_radius').value
         leak_rate = self.get_parameter('leak_rate').value
         n_iterations = self.get_parameter('n_iterations').value
+        lstm_hidden_size = self.get_parameter('lstm_hidden_size').value
+        lstm_num_layers = self.get_parameter('lstm_num_layers').value
         
         # get GPU if available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -47,6 +54,7 @@ class Edge_ROSNode(Node):
         # Store configuration
         self.func = func
         self.model_type = model_type.lower()
+        self.training = True  # Track training vs evaluation mode
         
         if self.model_type not in ['reservoir', 'lstm']:
             raise ValueError(f"model_type must be 'reservoir' or 'lstm', got '{self.model_type}'")
@@ -61,31 +69,71 @@ class Edge_ROSNode(Node):
         self.param_publisher = self.create_publisher(String, 'reservoir_params', qos_profile)
         self.ready_publisher = self.create_publisher(String, 'edge_ready', qos_profile)
         self.subscription = self.create_subscription(Float32MultiArray, f'{self.func}_agent_msg', self._handle_input, qos_profile)
-        self.output_publisher = self.create_publisher(Float32MultiArray, f'{self.func}_res_msg', qos_profile)
+        self.output_publisher = self.create_publisher(Float32MultiArray, f'{self.func}_edge_msg', qos_profile)
 
         input_dim = d.function_dims(func)
+        output_dim = d.function_dims(func)  # Separate output_dim for asymmetric functions
         self.reservoir_params = {
             "res_dim": res_dim,
             "input_dim": input_dim,
+            "output_dim": output_dim,
             "spectral_radius": spectral_radius,
             "leak_rate": leak_rate, 
             "iter": n_iterations,
-            "model_type": self.model_type
+            "model_type": self.model_type,
+            "lstm_hidden_size": lstm_hidden_size,
+            "lstm_num_layers": lstm_num_layers
         }
 
         # instantiate model based on model_type
-        if self.model_type == 'reservoir':
-            self.model = Reservoir(res_dim=self.reservoir_params['res_dim'],
-                                   input_dim=self.reservoir_params['input_dim'],
-                                   spectral_radius=self.reservoir_params['spectral_radius'], 
-                                   leak_rate=self.reservoir_params['leak_rate']).to(self.device)
-        elif self.model_type == 'lstm':
-            #TODO: Define and instantiate LSTM model
+        self.model = self._build_model(self.model_type, self.reservoir_params).to(self.device)
         
         # publish parameters to agent
         self._publish_params()
         
-        self.get_logger().info(f"Edge {self.model_type} node ready. Model: {res_dim}D, Input: {input_dim}D, Function: {self.func}")
+        self.get_logger().info(f"Edge {self.model_type} node ready. Model: {res_dim}D, Input: {input_dim}D, Output: {output_dim}D, Function: {self.func}")
+
+    def _build_model(self, model_type: str, params: Dict[str, Any]):
+        '''
+        Implementation-agnostic method to instantiate model based on type.
+        Encapsulates all model-specific parameter assignment logic.
+        For LSTM, also initializes training infrastructure (optimizer, loss function).
+        
+        Args:
+            model_type: Type of model ('reservoir' or 'lstm')
+            params: Dictionary containing model parameters
+                    Must include: res_dim, input_dim
+                    Reservoir-specific: spectral_radius, leak_rate
+                    LSTM-specific: (can be extended)
+        
+        Returns:
+            Instantiated model object
+        '''
+        if model_type == 'reservoir':
+            return Reservoir(
+                res_dim=params['res_dim'],
+                input_dim=params['input_dim'],
+                spectral_radius=params['spectral_radius'],
+                leak_rate=params['leak_rate']
+            )
+        elif model_type == 'lstm':
+            torch.manual_seed(42)
+            np.random.seed(42)
+            model = LSTMModel(
+                input_size=params['input_dim'],
+                hidden_size=params.get('lstm_hidden_size', 64),
+                output_size=params['output_dim'],
+                num_layers=params.get('lstm_num_layers', 3)
+            )
+            
+            # Initialize LSTM training infrastructure
+            self.loss_fn = nn.MSELoss()
+            self.optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+            self.training_loss_history = []  # Track loss across batches
+            
+            return model
+        else:
+            raise ValueError(f"Unknown model type: {model_type}")
 
     def _msg_to_layer(self, msg):
         '''
@@ -114,8 +162,8 @@ class Edge_ROSNode(Node):
     def _handle_input(self, msg):
         '''
         callback to receive data from agent
-        run it through the reservoir
-        send reservoir output back to agent with sequence number
+        Process through model (reservoir or LSTM) and send output back to agent
+        Behavior differs based on training vs evaluation mode
         '''
         try:
             # Convert incoming message to tensor
@@ -124,18 +172,82 @@ class Edge_ROSNode(Node):
             # Reshape to (batch_size, input_dim)
             input_data = input_data.reshape(-1, self.reservoir_params['input_dim'])
 
-            # Process through reservoir
-            output_data = self.model.forward(input_data, n_steps=self.reservoir_params['iter'])
-            self.get_logger().debug(f"Reservoir output shape: {output_data.shape}")
+            if self.training:
+                # ============ TRAINING MODE ============
+                # TODO: Add training logic here
+                # For LSTM: forward pass, compute loss, backprop, optimizer step
+                # For Reservoir: reservoir doesn't train on edge (only agent readout trains)
+                self.model.train()
+                
+                if self.model_type == 'lstm':
+                    # LSTM training: single batch at a time
+                    # Target data should come from agent (ground truth trajectory)
+                    # For now, we forward pass and compute loss assuming target is available
+                    
+                    # Forward pass
+                    output_data = self.model.process_input(
+                        input_data,
+                        n_steps=self.reservoir_params['iter']
+                    )  # [B, output_size]
+                    
+                    # TODO: Receive ground truth target from agent
+                    # For now, this is a placeholder - you need to add target_data
+                    # target_data should be a tensor of shape [B, output_size]
+                    if hasattr(self, 'target_data'):
+                        target_data = self.target_data
+                    else:
+                        # Placeholder: use input as target (replace with actual target)
+                        target_data = input_data
+                    
+                    target_data = target_data.to(self.device, non_blocking=True).float()
+                    
+                    # Compute loss
+                    loss = self.loss_fn(output_data, target_data)
+                    
+                    # Backward pass and optimizer step
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    self.optimizer.step()
+                    
+                    # Track loss
+                    batch_loss = loss.item()
+                    self.training_loss_history.append(batch_loss)
+                    self.get_logger().debug(f"LSTM training batch loss: {batch_loss:.6f}")
+                    
+                    # Send output back to agent
+                    output_msg = self._data_to_msg(output_data)
+                    self.output_publisher.publish(output_msg)
+                    self.get_logger().debug(f"Published LSTM output (training)")
+                elif self.model_type == 'reservoir':
+                    # Reservoir: just forward pass, no training on edge
+                    output_data = self.model.process_input(
+                        input_data,
+                        n_steps=self.reservoir_params['iter']
+                    )
+                    self.get_logger().debug(f"Model output shape: {output_data.shape}")
 
-            # Convert output to message and publish
-            output_msg = self._data_to_msg(output_data)
+                    # Convert output to message and publish
+                    output_msg = self._data_to_msg(output_data)
+                    self.output_publisher.publish(output_msg)
+                    self.get_logger().debug(f"Published model output (training)")
+            else:
+                # ============ EVALUATION MODE ============
+                # Process through model using standard interface
+                self.model.eval()
+                output_data = self.model.process_input(
+                    input_data,
+                    n_steps=self.reservoir_params['iter']
+                )
+                self.get_logger().debug(f"Model output shape: {output_data.shape}")
 
-            #output_msg.seq = msg.seq  # Preserve sequence number
+                # Convert output to message and publish
+                output_msg = self._data_to_msg(output_data)
 
-            self.output_publisher.publish(output_msg)
+                #output_msg.seq = msg.seq  # Preserve sequence number
 
-            self.get_logger().debug(f"Published reservoir output for")
+                self.output_publisher.publish(output_msg)
+
+                self.get_logger().debug(f"Published model output (evaluation)")
 
         except Exception as e:
             self.get_logger().error(f"Error in _handle_input: {e}")

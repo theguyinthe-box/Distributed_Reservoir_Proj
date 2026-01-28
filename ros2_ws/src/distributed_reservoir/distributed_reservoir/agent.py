@@ -49,6 +49,9 @@ class Agent_ROSNode(Node):
         
         self.training = True
         self.res_dim = None
+        self.model_type = None  # Will be set from edge parameters ('reservoir' or 'lstm')
+        self.scaler = StandardScaler()  # For LSTM inverse transform
+        self.pred_len = eval_length  # Prediction length for validation
 
         # store function type
         self.function = func
@@ -65,8 +68,8 @@ class Agent_ROSNode(Node):
         self.handshake_complete = False
         self.reservoir_param_subscriber = self.create_subscription(String, 'reservoir_params', self._handle_params, qos_profile) 
         self.handshake_subscriber = self.create_subscription(String, 'edge_ready', self._handle_handshake, qos_profile)
-        # subscribe to reservoir output
-        self.data_subscription = self.create_subscription(Float32MultiArray, f'{self.function}_res_msg', self._handle_reservoir_data, qos_profile)
+        # subscribe to edge model output
+        self.data_subscription = self.create_subscription(Float32MultiArray, f'{self.function}_edge_msg', self._handle_edge_data, qos_profile)
         # Publishers
         self.data_publisher = self.create_publisher(Float32MultiArray, f'{self.function}_agent_msg', qos_profile)
         self.readiness_publisher = self.create_publisher(String, 'agent_ready', qos_profile)        
@@ -123,51 +126,99 @@ class Agent_ROSNode(Node):
             import traceback
             traceback.print_exc()
 
-    def _handle_reservoir_data(self, msg):
+    def _handle_edge_data(self, msg):
         '''
-        callback to handle incoming reservoir data
-        trains the readout layer on every message received
+        callback to handle incoming edge model data
+        Behavior depends on model type:
+        - Reservoir: trains readout layer on edge output
+        - LSTM: forwards raw data to edge (LSTM trains end-to-end)
         '''
-        if self.training:
+        if self.model_type == 'reservoir':
+            # Reservoir agent: train readout layer on reservoir states
+            if self.training:
+                try:
+                    # Convert message to tensor
+                    edge_output = self._msg_to_layer(msg)
+                    
+                    #TODO record rtt
+                    #rtt_seconds = self.logger.record_roundtrip_time(msg.seq)
+                    #self.get_logger().debug(f"Roundtrip time for seq {msg.seq}: {rtt_seconds*1000:.2f} ms")
+                    
+                    # Get ground truth target from last generated data batch
+                    if len(self.logger.gst_data_hist) > 0:
+                        target = torch.tensor(self.logger.gst_data_hist[-1], dtype=torch.float32, device=self.device).T
+                        # Train on this message immediately
+                        self._train_readout(edge_output, target)
+                        
+                except Exception as e:
+                    self.get_logger().error(f"Error handling edge data in training: {e}")
+            else:
+                try:
+                    # Convert message to tensor
+                    edge_output = self._msg_to_layer(msg)
+                    
+                    #TODO record rtt
+                    #rtt_seconds = self.logger.record_roundtrip_time(msg.seq)
+                    #self.get_logger().debug(f"Roundtrip time for seq {msg.seq}: {rtt_seconds*1000:.2f} ms")
+                    
+                    # Predict through trained readout layer
+                    prediction = self.model(edge_output)
+                    self.logger.pred_hist.append(prediction)
+                    self.last_pred = prediction
+                    
+                except Exception as e:
+                    self.get_logger().error(f"Error handling edge data in eval: {e}")
+                    import traceback
+                    traceback.print_exc()
+        
+        elif self.model_type == 'lstm':
+            # LSTM agent: edge handles training, agent validates and processes output
             try:
-                # Convert message to tensor
-                reservoir_output = self._msg_to_layer(msg)
-                
-                #TODO record rtt
-                #rtt_seconds = self.logger.record_roundtrip_time(msg.seq)
-                #self.get_logger().debug(f"Roundtrip time for seq {msg.seq}: {rtt_seconds*1000:.2f} ms")
-                
-                # Get ground truth target from last generated data batch
-                if len(self.logger.gst_data_hist) > 0:
-                    target = torch.tensor(self.logger.gst_data_hist[-1], dtype=torch.float32, device=self.device).T
-                    # Train on this message immediately
-                    self._train_readout(reservoir_output, target)
+                if self.training:
+                    # During training, LSTM on edge is being trained
+                    # Agent just stores the output (no local training)
+                    pass
+                else:
+                    # Evaluation: validate payload, extract timing data, and inverse transform
+                    data = np.array(msg.data, dtype=np.float64)
+                    n_pred = self.pred_len * self.function_dims
+                    
+                    # Payload size validation
+                    if data.size < n_pred:
+                        self.get_logger().error(
+                            f"Received payload too small: {data.size} < expected {n_pred}"
+                        )
+                        return
+                    
+                    # Split prediction data from timing data
+                    pred_data = data[:n_pred]
+                    pred_times_data = data[n_pred:]
+                    
+                    # Validate prediction data dimensionality
+                    if pred_data.size % self.function_dims != 0:
+                        self.get_logger().error(
+                            f"Prediction data length {pred_data.size} is not a multiple of {self.function_dims}!"
+                        )
+                        return
+                    
+                    # Reshape and inverse transform back to original space
+                    output_scaled = pred_data.reshape(-1, self.function_dims)
+                    output = self.scaler.inverse_transform(output_scaled)
+                    
+                    # Convert to tensor for consistency with reservoir path
+                    prediction = torch.tensor(output, dtype=torch.float32, device=self.device)
+                    self.logger.pred_hist.append(prediction)
+                    self.last_pred = prediction
                     
             except Exception as e:
-                self.get_logger().error(f"Error handling reservoir data in training: {e}")
-        else:
-            try:
-                # Convert message to tensor
-                reservoir_output = self._msg_to_layer(msg)
-                
-                #TODO record rtt
-                #rtt_seconds = self.logger.record_roundtrip_time(msg.seq)
-                #self.get_logger().debug(f"Roundtrip time for seq {msg.seq}: {rtt_seconds*1000:.2f} ms")
-                
-                # Predict through trained readout layer
-                prediction = self.model(reservoir_output)
-                self.logger.pred_hist.append(prediction)
-                self.last_pred = prediction
-                
-            except Exception as e:
-                self.get_logger().error(f"Error handling reservoir data in eval: {e}")
+                self.get_logger().error(f"Error handling LSTM edge data: {e}")
                 import traceback
                 traceback.print_exc()
 
     def _handle_params(self, msg):
         '''
         callback to handle parameter updates from edge
-        extracts reservoir parameters from JSON string message
+        extracts model parameters from JSON string message
         '''
         if self.connected_to_edge:
             return
@@ -175,14 +226,18 @@ class Agent_ROSNode(Node):
             # Parse JSON string to get parameters
             params = json.loads(msg.data)
             self.res_dim = params['res_dim']
-            self.get_logger().info(f"Received reservoir parameters: res_dim={self.res_dim}")
+            self.model_type = params.get('model_type', 'reservoir')  # Default to reservoir for backward compatibility
+            self.get_logger().info(f"Received edge parameters: model_type={self.model_type}, res_dim={self.res_dim}")
             
-            #instantiate readout
-            self.model = Readout(self.res_dim, self.function_dims)
-            #put readout on gpu
-            self.model.to(self.device)
+            # Only instantiate readout layer for reservoir agents
+            if self.model_type == 'reservoir':
+                self.model = Readout(self.res_dim, self.function_dims)
+                self.model.to(self.device)
+            else:
+                # LSTM agent: no local model needed, just reshape predictions
+                self.model = None
 
-            # set connection var
+            # Set connection var
             self.connected_to_edge = True
         except Exception as e:
             self.get_logger().error(f"Error handling parameters: {e}")
@@ -300,9 +355,9 @@ class Agent_ROSNode(Node):
             traceback.print_exc()
             return None, None
     
-    def _send_batch_to_res(self):
+    def _send_batch_to_edge(self):
         '''
-        generate data and send batch of data to reservoir
+        generate data and send batch of data to edge model
         '''
         # Generate data using the dynamical function
         try:    
@@ -324,16 +379,16 @@ class Agent_ROSNode(Node):
             self.ic = data[:, -1]
             self.get_logger().debug(f"Sent batch {seq} at t=[{self.t_curr},{self.t_curr+self.msg_length*self.dt})")
         except Exception as e:
-            self.get_logger().error(f"Error _send_batch_to_res: {e}")
+            self.get_logger().error(f"Error _send_batch_to_edge: {e}")
 
-    def _pred_with_res(self):
+    def _pred_with_edge(self):
         try:    
             # Extract last point (last column) from last trajectory
             last_ic = self.logger.gst_data_hist[-1][:, -1]
             data, _ = self._generate_data(self.t_curr, last_ic)
             
             if data is None:
-                self.get_logger().warn("Failed to generate data in _pred_with_res")
+                self.get_logger().warn("Failed to generate data in _pred_with_edge")
                 return
                 
             self.get_logger().debug(f"data generated sending prediction-based trajectory")
@@ -343,17 +398,18 @@ class Agent_ROSNode(Node):
             
             # Update initial conditions for next batch
             self.ic = data[:, -1]
-            self.t_curr += self.msg_length * self.dt
+            # BAD: double increment of t_curr
+#            self.t_curr += self.msg_length * self.dt
         except Exception as e:
-            self.get_logger().error(f"Error _pred_with_res: {e}")
+            self.get_logger().error(f"Error _pred_with_edge: {e}")
             import traceback
             traceback.print_exc()
 
 
-    ###same as send_batch_to_res
+    ###same as send_batch_to_edge
     def _run(self):
         '''
-        Main node spin loop: generates data, feeds through reservoir, sends output
+        Main node spin loop: generates data, feeds through edge model, sends output
         '''
         try:
             if self.t_curr >= self.max_time:
@@ -363,14 +419,14 @@ class Agent_ROSNode(Node):
             elif self.t_curr < self.training_length:
                 #self.get_logger().debug("training")
                 # Training phase: send real data
-                self._send_batch_to_res()
+                self._send_batch_to_edge()
                 self.t_curr += self.msg_length * self.dt
                 self.training = True
             else:
                 #self.get_logger().info("evaluating")
                 # Evaluation phase: use predictions as input
                 if self.last_pred is not None:
-                    self._pred_with_res()
+                    self._pred_with_edge()
                     self.t_curr += self.msg_length * self.dt
                     self.training = False
                 else:
