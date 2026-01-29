@@ -25,7 +25,10 @@ class Edge_ROSNode(Node):
                  leak_rate: float = 0.15,
                  n_iterations: int = 20,
                  lstm_hidden_size: int = 64,
-                 lstm_num_layers: int = 3):
+                 lstm_num_layers: int = 3,
+                 training_length: int = 100,
+                 dt: float = 0.01,
+                 batch_size: int = 2):
         
         super().__init__('edge_server_ros_node')    
         
@@ -38,6 +41,9 @@ class Edge_ROSNode(Node):
         self.declare_parameter('n_iterations', n_iterations)
         self.declare_parameter('lstm_hidden_size', lstm_hidden_size)
         self.declare_parameter('lstm_num_layers', lstm_num_layers)
+        self.declare_parameter('training_length', training_length)
+        self.declare_parameter('dt', dt)
+        self.declare_parameter('batch_size', batch_size)
         
         func = self.get_parameter('func').value
         model_type = self.get_parameter('model_type').value
@@ -47,6 +53,9 @@ class Edge_ROSNode(Node):
         n_iterations = self.get_parameter('n_iterations').value
         lstm_hidden_size = self.get_parameter('lstm_hidden_size').value
         lstm_num_layers = self.get_parameter('lstm_num_layers').value
+        training_length = self.get_parameter('training_length').value
+        dt = self.get_parameter('dt').value
+        batch_size = self.get_parameter('batch_size').value
         
         # get GPU if available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -55,6 +64,10 @@ class Edge_ROSNode(Node):
         self.func = func
         self.model_type = model_type.lower()
         self.training = True  # Track training vs evaluation mode
+        self.training_length = training_length  # Training duration for LSTM
+        self.batch_count = 0  # Track number of batches received for training length logic
+        self.dt = dt  # Time step for integration
+        self.batch_size = batch_size  # Number of samples per batch
         
         if self.model_type not in ['reservoir', 'lstm']:
             raise ValueError(f"model_type must be 'reservoir' or 'lstm', got '{self.model_type}'")
@@ -130,6 +143,7 @@ class Edge_ROSNode(Node):
             self.loss_fn = nn.MSELoss()
             self.optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
             self.training_loss_history = []  # Track loss across batches
+            self.prev_input = None  # Buffer for previous input (used as training input, current input is target)
             
             return model
         else:
@@ -172,52 +186,76 @@ class Edge_ROSNode(Node):
             # Reshape to (batch_size, input_dim)
             input_data = input_data.reshape(-1, self.reservoir_params['input_dim'])
 
+            # Increment batch count and check if training is complete
+            self.batch_count += 1
+            # Estimate time elapsed based on batch count
+            time_elapsed = self.batch_count * self.batch_size * self.dt
+                    
+            if time_elapsed > self.training_length:
+                self.training = False
+                self.get_logger().info(f"LSTM training complete after {self.batch_count} batches (t={time_elapsed:.2f}s)")
+                    
             if self.training:
                 # ============ TRAINING MODE ============
-                # TODO: Add training logic here
                 # For LSTM: forward pass, compute loss, backprop, optimizer step
                 # For Reservoir: reservoir doesn't train on edge (only agent readout trains)
                 self.model.train()
                 
                 if self.model_type == 'lstm':
-                    # LSTM training: single batch at a time
-                    # Target data should come from agent (ground truth trajectory)
-                    # For now, we forward pass and compute loss assuming target is available
+                    # LSTM training: time series prediction
+                    # Model predicts next timestep from current timestep
+                    # Input: previous timestep value, Target: current timestep value (ground truth)
                     
-                    # Forward pass
-                    output_data = self.model.process_input(
-                        input_data,
-                        n_steps=self.reservoir_params['iter']
-                    )  # [B, output_size]
-                    
-                    # TODO: Receive ground truth target from agent
-                    # For now, this is a placeholder - you need to add target_data
-                    # target_data should be a tensor of shape [B, output_size]
-                    if hasattr(self, 'target_data'):
-                        target_data = self.target_data
+                    # Skip first batch (no previous input to use as training input)
+                    if self.prev_input is None:
+                        self.prev_input = input_data.clone()
+                        self.get_logger().debug("LSTM: Buffered first input, skipping training for this batch")
+                        # Still send output back to agent
+                        with torch.no_grad():
+                            output_data = self.model.process_input(
+                                input_data,
+                                n_steps=self.reservoir_params['iter']
+                            )
+                        output_msg = self._data_to_msg(output_data)
+                        self.output_publisher.publish(output_msg)
                     else:
-                        # Placeholder: use input as target (replace with actual target)
-                        target_data = input_data
-                    
-                    target_data = target_data.to(self.device, non_blocking=True).float()
-                    
-                    # Compute loss
-                    loss = self.loss_fn(output_data, target_data)
-                    
-                    # Backward pass and optimizer step
-                    self.optimizer.zero_grad()
-                    loss.backward()
-                    self.optimizer.step()
-                    
-                    # Track loss
-                    batch_loss = loss.item()
-                    self.training_loss_history.append(batch_loss)
-                    self.get_logger().debug(f"LSTM training batch loss: {batch_loss:.6f}")
-                    
-                    # Send output back to agent
-                    output_msg = self._data_to_msg(output_data)
-                    self.output_publisher.publish(output_msg)
-                    self.get_logger().debug(f"Published LSTM output (training)")
+                        # Use previous input as model input, current input as target
+                        train_input = self.prev_input
+                        target_data = input_data  # Current input is ground truth for previous prediction
+                        
+                        # Forward pass on previous input
+                        output_data = self.model.process_input(
+                            train_input,
+                            n_steps=self.reservoir_params['iter']
+                        )  # [B, output_size]
+                        
+                        target_data = target_data.to(self.device, non_blocking=True).float()
+                        
+                        # Compute loss
+                        loss = self.loss_fn(output_data, target_data)
+                        
+                        # Backward pass and optimizer step
+                        self.optimizer.zero_grad()
+                        loss.backward()
+                        self.optimizer.step()
+                        
+                        # Track loss
+                        batch_loss = loss.item()
+                        self.training_loss_history.append(batch_loss)
+                        self.get_logger().debug(f"LSTM training batch loss: {batch_loss:.6f}")
+                        
+                        # Update buffer for next iteration
+                        self.prev_input = input_data.clone()
+                        
+                        # Send prediction for current input back to agent
+                        with torch.no_grad():
+                            current_output = self.model.process_input(
+                                input_data,
+                                n_steps=self.reservoir_params['iter']
+                            )
+                        output_msg = self._data_to_msg(current_output)
+                        self.output_publisher.publish(output_msg)
+                        self.get_logger().debug(f"Published LSTM output (training)")
                 elif self.model_type == 'reservoir':
                     # Reservoir: just forward pass, no training on edge
                     output_data = self.model.process_input(
