@@ -2,7 +2,7 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from std_msgs.msg import Float32MultiArray, String 
+from std_msgs.msg import Float32MultiArray, String
 from sklearn.preprocessing import StandardScaler
 import numpy as np
 import torch
@@ -17,7 +17,7 @@ from .functions import dynamical_functions as d
 
 
 class Edge_ROSNode(Node):
-    def __init__(self, 
+    def __init__(self,
                  func: str = 'lorenz',
                  model_type: str = 'reservoir',
                  res_dim: int = 256,
@@ -29,9 +29,9 @@ class Edge_ROSNode(Node):
                  training_length: int = 100,
                  dt: float = 0.01,
                  batch_size: int = 2):
-        
-        super().__init__('edge_server_ros_node')    
-        
+
+        super().__init__('edge_server_ros_node')
+
         # Declare and read ROS2 parameters
         self.declare_parameter('func', func)
         self.declare_parameter('model_type', model_type)
@@ -44,7 +44,7 @@ class Edge_ROSNode(Node):
         self.declare_parameter('training_length', training_length)
         self.declare_parameter('dt', dt)
         self.declare_parameter('batch_size', batch_size)
-        
+
         func = self.get_parameter('func').value
         model_type = self.get_parameter('model_type').value
         res_dim = self.get_parameter('res_dim').value
@@ -56,10 +56,10 @@ class Edge_ROSNode(Node):
         training_length = self.get_parameter('training_length').value
         dt = self.get_parameter('dt').value
         batch_size = self.get_parameter('batch_size').value
-        
+
         # get GPU if available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
+
         # Store configuration
         self.func = func
         self.model_type = model_type.lower()
@@ -68,13 +68,13 @@ class Edge_ROSNode(Node):
         self.batch_count = 0  # Track number of batches received for training length logic
         self.dt = dt  # Time step for integration
         self.batch_size = batch_size  # Number of samples per batch
-        
+
         if self.model_type not in ['reservoir', 'lstm']:
             raise ValueError(f"model_type must be 'reservoir' or 'lstm', got '{self.model_type}'")
-        
+
         # hyper parameters
 
-        
+
         # Publishers / Subscribers
         qos_profile = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST)
 
@@ -91,7 +91,7 @@ class Edge_ROSNode(Node):
             "input_dim": input_dim,
             "output_dim": output_dim,
             "spectral_radius": spectral_radius,
-            "leak_rate": leak_rate, 
+            "leak_rate": leak_rate,
             "iter": n_iterations,
             "model_type": self.model_type,
             "lstm_hidden_size": lstm_hidden_size,
@@ -100,10 +100,10 @@ class Edge_ROSNode(Node):
 
         # instantiate model based on model_type
         self.model = self._build_model(self.model_type, self.reservoir_params).to(self.device)
-        
+
         # publish parameters to agent
         self._publish_params()
-        
+
         self.get_logger().info(f"Edge {self.model_type} node ready. Model: {res_dim}D, Input: {input_dim}D, Output: {output_dim}D, Function: {self.func}")
 
     def _build_model(self, model_type: str, params: Dict[str, Any]):
@@ -111,14 +111,14 @@ class Edge_ROSNode(Node):
         Implementation-agnostic method to instantiate model based on type.
         Encapsulates all model-specific parameter assignment logic.
         For LSTM, also initializes training infrastructure (optimizer, loss function).
-        
+
         Args:
             model_type: Type of model ('reservoir' or 'lstm')
             params: Dictionary containing model parameters
                     Must include: res_dim, input_dim
                     Reservoir-specific: spectral_radius, leak_rate
                     LSTM-specific: (can be extended)
-        
+
         Returns:
             Instantiated model object
         '''
@@ -138,13 +138,13 @@ class Edge_ROSNode(Node):
                 output_size=params['output_dim'],
                 num_layers=params.get('lstm_num_layers', 3)
             )
-            
+
             # Initialize LSTM training infrastructure
             self.loss_fn = nn.MSELoss()
             self.optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
             self.training_loss_history = []  # Track loss across batches
             self.prev_input = None  # Buffer for previous input (used as training input, current input is target)
-            
+
             return model
         else:
             raise ValueError(f"Unknown model type: {model_type}")
@@ -155,7 +155,7 @@ class Edge_ROSNode(Node):
         tranlate to nodes
         '''
         return torch.tensor(msg.data, dtype=torch.float32, device=self.device)
-   
+
     def _data_to_msg(self, u):
         '''
         translate data to ROS msg
@@ -163,7 +163,7 @@ class Edge_ROSNode(Node):
         msg = Float32MultiArray()
         msg.data = torch.asarray(u, dtype=torch.float32).flatten().tolist()
         return msg
-    
+
     def _publish_params(self):
         '''
         publish reservoir parameters to agent as JSON string
@@ -172,7 +172,7 @@ class Edge_ROSNode(Node):
         msg.data = json.dumps(self.reservoir_params)
         self.param_publisher.publish(msg)
         self.get_logger().info(f"Published reservoir parameters to agent")
-    
+
     def _handle_input(self, msg):
         '''
         callback to receive data from agent
@@ -186,26 +186,26 @@ class Edge_ROSNode(Node):
             # Reshape to (batch_size, input_dim)
             input_data = input_data.reshape(-1, self.reservoir_params['input_dim'])
 
-            # Increment batch count and check if training is complete
-            self.batch_count += 1
-            # Estimate time elapsed based on batch count
-            time_elapsed = self.batch_count * self.batch_size * self.dt
-                    
-            if time_elapsed > self.training_length:
-                self.training = False
-                self.get_logger().info(f"LSTM training complete after {self.batch_count} batches (t={time_elapsed:.2f}s)")
-                    
             if self.training:
                 # ============ TRAINING MODE ============
                 # For LSTM: forward pass, compute loss, backprop, optimizer step
                 # For Reservoir: reservoir doesn't train on edge (only agent readout trains)
                 self.model.train()
-                
+
                 if self.model_type == 'lstm':
+                    # Increment batch count and check if training is complete
+                    self.batch_count += 1
+                    # Estimate time elapsed based on batch count
+                    time_elapsed = self.batch_count * self.batch_size * self.dt
+
+                    if time_elapsed >= self.training_length:
+                        self.training = False
+                        self.get_logger().info(f"LSTM training complete after {self.batch_count} batches (t={time_elapsed:.2f}s)")
+
                     # LSTM training: time series prediction
                     # Model predicts next timestep from current timestep
                     # Input: previous timestep value, Target: current timestep value (ground truth)
-                    
+
                     # Skip first batch (no previous input to use as training input)
                     if self.prev_input is None:
                         self.prev_input = input_data.clone()
@@ -222,31 +222,31 @@ class Edge_ROSNode(Node):
                         # Use previous input as model input, current input as target
                         train_input = self.prev_input
                         target_data = input_data  # Current input is ground truth for previous prediction
-                        
+
                         # Forward pass on previous input
                         output_data = self.model.process_input(
                             train_input,
                             n_steps=self.reservoir_params['iter']
                         )  # [B, output_size]
-                        
+
                         target_data = target_data.to(self.device, non_blocking=True).float()
-                        
+
                         # Compute loss
                         loss = self.loss_fn(output_data, target_data)
-                        
+
                         # Backward pass and optimizer step
                         self.optimizer.zero_grad()
                         loss.backward()
                         self.optimizer.step()
-                        
+
                         # Track loss
                         batch_loss = loss.item()
                         self.training_loss_history.append(batch_loss)
                         self.get_logger().debug(f"LSTM training batch loss: {batch_loss:.6f}")
-                        
+
                         # Update buffer for next iteration
                         self.prev_input = input_data.clone()
-                        
+
                         # Send prediction for current input back to agent
                         with torch.no_grad():
                             current_output = self.model.process_input(
@@ -291,7 +291,7 @@ class Edge_ROSNode(Node):
             self.get_logger().error(f"Error in _handle_input: {e}")
             import traceback
             traceback.print_exc()
-    
+
     def _handle_agent_ready(self, msg):
         '''
         callback to handle agent readiness signal
@@ -306,11 +306,11 @@ class Edge_ROSNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    
+
     # Default parameters (can be overridden via ROS2 launch files or environment variables)
     func = 'lorenz'  # or 'rossler'
     model_type = 'reservoir'  # or 'lstm'
-    
+
     node = Edge_ROSNode(
         func=func,
         model_type=model_type,

@@ -176,39 +176,18 @@ class Agent_ROSNode(Node):
             try:
                 if self.training:
                     # During training, LSTM on edge is being trained
-                    # Agent just stores the output (no local training)
-                    pass
+                    # Store the edge output so we have last_pred ready for eval transition
+                    data = np.array(msg.data, dtype=np.float32)
+                    prediction = torch.tensor(data.reshape(-1, self.function_dims), dtype=torch.float32, device=self.device)
+                    self.last_pred = prediction
+                    self.get_logger().debug(f"LSTM training: received edge output, shape={prediction.shape}")
                 else:
-                    # Evaluation: validate payload, extract timing data, and inverse transform
-                    data = np.array(msg.data, dtype=np.float64)
-                    n_pred = self.pred_len * self.function_dims
-                    
-                    # Payload size validation
-                    if data.size < n_pred:
-                        self.get_logger().error(
-                            f"Received payload too small: {data.size} < expected {n_pred}"
-                        )
-                        return
-                    
-                    # Split prediction data from timing data
-                    pred_data = data[:n_pred]
-                    pred_times_data = data[n_pred:]
-                    
-                    # Validate prediction data dimensionality
-                    if pred_data.size % self.function_dims != 0:
-                        self.get_logger().error(
-                            f"Prediction data length {pred_data.size} is not a multiple of {self.function_dims}!"
-                        )
-                        return
-                    
-                    # Reshape and inverse transform back to original space
-                    output_scaled = pred_data.reshape(-1, self.function_dims)
-                    output = self.scaler.inverse_transform(output_scaled)
-                    
-                    # Convert to tensor for consistency with reservoir path
-                    prediction = torch.tensor(output, dtype=torch.float32, device=self.device)
+                    # Evaluation: process LSTM output from edge
+                    data = np.array(msg.data, dtype=np.float32)
+                    prediction = torch.tensor(data.reshape(-1, self.function_dims), dtype=torch.float32, device=self.device)
                     self.logger.pred_hist.append(prediction)
                     self.last_pred = prediction
+                    self.get_logger().debug(f"LSTM eval: received edge output, shape={prediction.shape}")
                     
             except Exception as e:
                 self.get_logger().error(f"Error handling LSTM edge data: {e}")

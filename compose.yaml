@@ -4,6 +4,20 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     command: ["/entrypoints/edge_entrypoint.sh"]
+    environment:
+      # Shared parameters
+      - FUNC=lorenz
+      - LOG_LEVEL=info
+      # Edge-specific parameters
+      - MODEL_TYPE=reservoir
+      - RES_DIM=256
+      - SPECTRAL_RADIUS=1.1
+      - LEAK_RATE=0.15
+      - N_ITERATIONS=20
+#    volumes:
+#      # Mount local ROS2 workspace for development (no docker rebuild needed)
+#      - ./ros2_ws/install:/ros2_ws/install
+#      - ./ros2_ws/build:/ros2_ws/build
     networks:
       - ros_docker_reservoir
     deploy:
@@ -19,6 +33,16 @@ services:
         context: .
         dockerfile: docker/Dockerfile
       command: ["/entrypoints/agent_entrypoint.sh"]
+      environment:
+        # Shared parameters
+        - FUNC=lorenz
+        - LOG_LEVEL=info
+        # Agent-specific parameters
+        - DT=0.01
+        - INTEGRATOR=RK45
+        - TRAINING_LENGTH=100
+        - EVAL_LENGTH=100
+        - BATCH_SIZE=2
       volumes:
         - ./results:/results
       networks:

@@ -1,0 +1,11 @@
+services:
+  edge:
+    environment:
+      - FUNC=lorenz
+      - MODEL_TYPE=lstm
+      - LOG_LEVEL=debug
+
+  agent:
+    environment:
+      - FUNC=lorenz
+      - LOG_LEVEL=debug

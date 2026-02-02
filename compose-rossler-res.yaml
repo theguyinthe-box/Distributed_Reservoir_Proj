@@ -1,0 +1,11 @@
+services:
+  edge:
+    environment:
+      - FUNC=rossler
+      - MODEL_TYPE=reservoir
+      - LOG_LEVEL=info
+
+  agent:
+    environment:
+      - FUNC=rossler
+      - LOG_LEVEL=info
