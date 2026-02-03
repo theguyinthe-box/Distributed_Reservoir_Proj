@@ -81,6 +81,21 @@ class Reservoir(nn.Module):
                 self.state = y
         
         return y
+    
+    def process_input(self, input_data: torch.Tensor, n_steps: int = 1, **kwargs) -> torch.Tensor:
+        '''
+        Process input data through the reservoir.
+        Standard interface for edge server integration.
+        
+        Args:
+            input_data: Tensor of shape (batch_size, input_dim)
+            n_steps: Number of reservoir iterations
+            **kwargs: Additional arguments (unused, for interface compatibility)
+        
+        Returns:
+            Reservoir output tensor of shape (batch_size, res_dim)
+        '''
+        return self.forward(input_data, n_steps=n_steps)
 
     def powerlaw_random(self, 
                         dim, 
