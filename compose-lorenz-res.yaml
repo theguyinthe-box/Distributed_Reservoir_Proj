@@ -1,0 +1,11 @@
+services:
+  edge:
+    environment:
+      - FUNC=lorenz
+      - MODEL_TYPE=reservoir
+      - LOG_LEVEL=info
+
+  agent:
+    environment:
+      - FUNC=lorenz
+      - LOG_LEVEL=info
